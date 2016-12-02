@@ -1124,7 +1124,9 @@ namespace  CrossbarTeraSLib {
 			if (chipSelect && (mNumDie > 1))
 				cwBankIndex = cwBankIndex + mCodeWordNum / 2;
 
-			mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+			//mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+			/*Data Latch 1 status is set to free*/
+			mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
 			mTrigCmdDispEvent.at(chanNum)->notify(SC_ZERO_TIME);
 			uint64_t pendingCmd;
 			createPendingCmdEntry(cmd, pendingCmd);
