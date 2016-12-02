@@ -2988,4 +2988,235 @@ void TeraSPCIeController::end_of_simulation()
 		mOnfiChanActivityReport->writeFile(chanIndex, mOnfiStartActivity.at(chanIndex), mOnfiEndActivity.at(chanIndex), " ");
 	}
 }
+
+void TeraSPCIeController::initChannelSpecificParameters()
+{
+	for (uint8_t chanIndex = 0; chanIndex < mChanNum; chanIndex++)
+	{
+#pragma region VECTOR_INSTANTIATION
+		mCmdDispatchEvent.push_back(new sc_event(sc_gen_unique_name("mCmdDispatchEvent")));
+		mAlcqNotFullEvent.push_back(new sc_event(sc_gen_unique_name("mAlcqNotFullEvent")));
+		mAdcqNotFullEvent.push_back(new sc_event(sc_gen_unique_name("mAdcqNotFullEvent")));
+		mAscqNotFullEvent.push_back(new sc_event(sc_gen_unique_name("mAscqNotFullEvent")));
+		mAlcqNotEmptyEvent.push_back(new sc_event(sc_gen_unique_name("mAlcqNotEmptyEvent")));
+		mAdcqNotEmptyEvent.push_back(new sc_event(sc_gen_unique_name("mAdcqNotEmptyEvent")));
+		mAscqNotEmptyEvent.push_back(new sc_event(sc_gen_unique_name("mAscqNotEmptyEvent")));
+		mEndReqEvent.push_back(new sc_event(sc_gen_unique_name("mEndReqEvent")));
+		mTrigCmdDispEvent.push_back(new sc_event(sc_gen_unique_name("mTrigCmdDispEvent")));
+		mEndReadEvent.push_back(new sc_event(sc_gen_unique_name("mEndReadEvent")));
+		mCmplTLPDataRxEvent.push_back(new sc_event(sc_gen_unique_name("mCmplTLPDataRxEvent")));
+		mReadDataSendEvent.push_back(new sc_event_queue(sc_gen_unique_name("mReadDataSendEvent")));
+		mChipSelectEvent.push_back(new sc_event(sc_gen_unique_name("mChipSelectEvent")));
+		mChipSelectTxEvent.push_back(new sc_event(sc_gen_unique_name("mChipSelectTxEvent")));
+		mDispatchCmdEvent.push_back(new sc_event(sc_gen_unique_name("mDispatchCmdEvent")));
+		mDispatchWriteCmdEvent.push_back(new sc_event(sc_gen_unique_name("mDispatchWriteCmdEvent")));
+
+		mDispatchOnBuffFreeEvent.push_back(new sc_event(sc_gen_unique_name("mDispatchOnBuffFreeEvent")));
+		mReadDataRxEvent.push_back(new sc_event(sc_gen_unique_name("mReadDataRxEvent")));
+		mWriteDataSentEvent.push_back(new sc_event(sc_gen_unique_name("mWriteDataSentEvent")));
+
+		mRespQueue.push_back(new tlm_utils::peq_with_get<tlm::tlm_generic_payload>(sc_gen_unique_name("respQueueEvent")));
+
+		pChipSelect.push_back(new sc_core::sc_out<bool>(sc_gen_unique_name("pChipSelect")));
+		pOnfiBus.push_back(new tlm_utils::simple_initiator_socket_tagged<TeraSPCIeController, ONFI_BUS_WIDTH, tlm::tlm_base_protocol_types>(sc_gen_unique_name("pOnfiBus")));
+		pOnfiBus.at(chanIndex)->register_nb_transport_bw(this, &TeraSPCIeController::nb_transport_bw, chanIndex);
+
+		mOnfiCode.push_back(0x00);
+		mCmdDispBankStatus.push_back(std::vector<cwBankStatus>(mCodeWordNum, cwBankStatus::BANK_FREE));
+		mCwBankStatus.push_back(std::vector<cwBankStatus>(mCodeWordNum, cwBankStatus::BANK_FREE));
+
+		queueHead.push_back(std::vector<int32_t>(mCodeWordNum, -1));
+		queueTail.push_back(std::vector<int32_t>(mCodeWordNum, -1));
+
+		mAlcq.push_back(ActiveCommandQueue(mCodeWordNum));
+		mAscq.push_back(ActiveCommandQueue(mCodeWordNum));
+		mAdcq.push_back(ActiveDMACmdQueue(mCodeWordNum));
+		mAvailableCredit.push_back(mCredit);
+
+		mDMAQueueData.push_back(queue<ActiveDMACmdQueueData>());
+		mDMADoneQueue.push_back(queue<ActiveDMACmdQueueData>());
+
+		mPendingCmdQueue.emplace_back(std::make_unique<PendingCmdQueueManager>(sc_gen_unique_name("mPendingQueue")));
+		mPendingReadCmdQueue.emplace_back(std::make_unique<PendingCmdQueueManager>(sc_gen_unique_name("mPendingReadQueue")));
+
+		mReadData.push_back(new uint8_t[mCwSize]);
+		mWriteData.push_back(new uint8_t[mCwSize]);
+
+		mOnfiChanTime.push_back(0);
+		mOnfiTotalTime.push_back(0);
+
+		mOnfiStartActivity.push_back(0);
+		mOnfiEndActivity.push_back(0);
+		mOnfiChanActivityStart.push_back(false);
+
+		mOnfiBusMutex.push_back(new sc_mutex(sc_gen_unique_name("mOnfiBusMutex")));
+
+#pragma endregion
+
+
+#pragma region DYNAMIC_THREADS_INSTANTIATION
+		mCmdDispatcherProcOpt.push_back(new sc_spawn_options());
+		mCmdDispatcherProcOpt.at(chanIndex)->set_sensitivity(mCmdDispatchEvent.at(chanIndex));
+		mCmdDispatcherProcOpt.at(chanIndex)->dont_initialize();
+		sc_spawn(sc_bind(&TeraSPCIeController::cmdDispatcherThread, \
+			this, chanIndex), sc_gen_unique_name("cmdDispatcherThread"), mCmdDispatcherProcOpt.at(chanIndex));
+
+		mChanMgrProcOpt.push_back(new sc_spawn_options());
+		sc_spawn(sc_bind(&TeraSPCIeController::chanManagerThread, \
+			this, chanIndex), sc_gen_unique_name("chanManagerThread"), mChanMgrProcOpt.at(chanIndex));
+
+		mLongQThreadOpt.push_back(new sc_spawn_options());
+		sc_spawn(sc_bind(&TeraSPCIeController::longQueueThread, \
+			this, chanIndex), sc_gen_unique_name("longQueuethread"), mLongQThreadOpt.at(chanIndex));
+
+		mDispatchReadCmdProcOpt.push_back(new sc_spawn_options());
+		sc_spawn(sc_bind(&TeraSPCIeController::dispatchReadCmdThread, \
+			this, chanIndex), sc_gen_unique_name("dispatchReadCmdThread"), mDispatchReadCmdProcOpt.at(chanIndex));
+#pragma endregion 
+
+#pragma region DYNAMIC_METHOD_INSTANTIATION
+		mPendingCmdProcOpt.push_back(new sc_spawn_options());
+		mPendingCmdProcOpt.at(chanIndex)->spawn_method();
+		mPendingCmdProcOpt.at(chanIndex)->set_sensitivity(&mPendingCmdQueue.at(chanIndex)->get_event());
+		mPendingCmdProcOpt.at(chanIndex)->dont_initialize();
+		sc_spawn(sc_bind(&TeraSPCIeController::pendingWriteCmdMethod, \
+			this, chanIndex), sc_gen_unique_name("pendingWriteCmdMethod"), mPendingCmdProcOpt.at(chanIndex));
+
+		mCheckRespProcOpt.push_back(new sc_spawn_options());
+		mCheckRespProcOpt.at(chanIndex)->spawn_method();
+		mCheckRespProcOpt.at(chanIndex)->set_sensitivity(&mRespQueue.at(chanIndex)->get_event());
+		mCheckRespProcOpt.at(chanIndex)->dont_initialize();
+		sc_spawn(sc_bind(&TeraSPCIeController::checkRespMethod, \
+			this, chanIndex), sc_gen_unique_name("checkRespMethod"), mCheckRespProcOpt.at(chanIndex));
+
+
+		mChipSelectProcOpt.push_back(new sc_spawn_options());
+		mChipSelectProcOpt.at(chanIndex)->spawn_method();
+		mChipSelectProcOpt.at(chanIndex)->set_sensitivity(mChipSelectEvent.at(chanIndex));
+		mChipSelectProcOpt.at(chanIndex)->dont_initialize();
+		sc_spawn(sc_bind(&TeraSPCIeController::chipSelectMethod, \
+			this, chanIndex), sc_gen_unique_name("chipSelectMethod"), mChipSelectProcOpt.at(chanIndex));
+#pragma endregion 
+
+#pragma region DYNAMIC_THREAD_INSTANTIATION
+		mReadCmpltMethodOpt.push_back(new sc_spawn_options());
+		mReadCmpltMethodOpt.at(chanIndex)->set_sensitivity(mReadDataSendEvent.at(chanIndex));
+		mReadCmpltMethodOpt.at(chanIndex)->dont_initialize();
+		sc_spawn(sc_bind(&TeraSPCIeController::memReadCompletionThread, \
+			this, chanIndex), sc_gen_unique_name("memReadCompletionThread"), mReadCmpltMethodOpt.at(chanIndex));
+
+		mPendingReadCmdProcOpt.push_back(new sc_spawn_options());
+		mPendingReadCmdProcOpt.at(chanIndex)->set_sensitivity(&mPendingReadCmdQueue.at(chanIndex)->get_event());
+		mPendingReadCmdProcOpt.at(chanIndex)->dont_initialize();
+		sc_spawn(sc_bind(&TeraSPCIeController::pendingReadCmdThread, \
+			this, chanIndex), sc_gen_unique_name("pendingCmdReadThread"), mPendingReadCmdProcOpt.at(chanIndex));
+
+		mSendWriteCmdProcOpt.push_back(new sc_spawn_options());
+
+		sc_spawn(sc_bind(&TeraSPCIeController::sendWriteCmdThread, \
+			this, chanIndex), sc_gen_unique_name("sendWriteCmdThread"), mSendWriteCmdProcOpt.at(chanIndex));
+
+#pragma endregion
+
+	}//for
+}
+
+void TeraSPCIeController::createReportFiles()
+{
+#pragma region FILE_ALLOCATION
+	try {
+		if (mEnMultiSim){
+
+			filename = "./Reports_PCIe/cntrl_latency_report";
+			mLatencyReport = new Report(appendParameters(filename, ".log"));
+			filename = "./Reports_PCIe/onfi_chan_util_report";
+			mOnfiChanUtilReport = new Report(appendParameters(filename, ".log"));
+			filename = "./Reports_PCIe/onfi_chan_activity_report";
+			mOnfiChanActivityReport = new Report(appendParameters(filename, ".log"));
+			filename = "./Reports_PCIe/longQueue_report";
+
+			mLatencyReportCsv = new Report(appendParameters("./Reports_PCIe/cntrl_latency_report", ".csv"));
+			mOnfiChanUtilReportCsv = new Report(appendParameters("./Reports_PCIe/onfi_chan_util_report", ".csv"));
+			mOnfiChanActivityReportCsv = new Report(appendParameters("./Reports_PCIe/onfi_chan_activity_report", ".csv"));
+		}
+		else{
+
+			mLatencyReport = new Report("./Reports_PCIe/cntrl_latency_report.log");
+			mOnfiChanUtilReport = new Report("./Reports_PCIe/onfi_chan_util_report.log");
+			mOnfiChanActivityReport = new Report("./Reports_PCIe/onfi_chan_activity_report.log");
+
+			mLatencyReportCsv = new Report("./Reports_PCIe/cntrl_latency_report.csv");
+			mOnfiChanUtilReportCsv = new Report("./Reports_PCIe/onfi_chan_util_report.csv");
+			mOnfiChanActivityReportCsv = new Report("./Reports_PCIe/onfi_chan_activity_report.csv");
+		}
+	}
+	catch (std::bad_alloc& ba)
+	{
+		std::cerr << "TeraSMemoryDevice:Bad File allocation" << ba.what() << std::endl;
+	}
+#pragma endregion
+
+
+#pragma region FILE_OPEN
+	if (!mOnfiChanActivityReport->openFile())
+	{
+		std::ostringstream msg;
+		msg.str("");
+		msg << "ONFI_CHAN_ACTIVITY_REPORT LOG: "
+			<< " ERROR OPENING FILE" << std::endl;
+		REPORT_FATAL(filename, __FUNCTION__, msg.str());
+		exit(EXIT_FAILURE);
+	}
+
+	if (!mLatencyReport->openFile())
+	{
+		std::ostringstream msg;
+		msg.str("");
+		msg << "LATENCY_REPORT LOG: "
+			<< " ERROR OPENING FILE" << std::endl;
+		REPORT_FATAL(filename, __FUNCTION__, msg.str());
+		exit(EXIT_FAILURE);
+	}
+
+	if (!mOnfiChanUtilReport->openFile())
+	{
+		std::ostringstream msg;
+		msg.str("");
+		msg << "ONFI_CHANNEL_UTILIZATION_REPORT LOG: "
+			<< " ERROR OPENING FILE" << std::endl;
+		REPORT_FATAL(filename, __FUNCTION__, msg.str());
+		exit(EXIT_FAILURE);
+	}
+
+	if (!mOnfiChanActivityReportCsv->openFile())
+	{
+		std::ostringstream msg;
+		msg.str("");
+		msg << "ONFI_CHAN_ACTIVITY_REPORT LOG: "
+			<< " ERROR OPENING FILE" << std::endl;
+		REPORT_FATAL(filename, __FUNCTION__, msg.str());
+		exit(EXIT_FAILURE);
+	}
+
+	if (!mLatencyReportCsv->openFile())
+	{
+		std::ostringstream msg;
+		msg.str("");
+		msg << "LATENCY_REPORT LOG: "
+			<< " ERROR OPENING FILE" << std::endl;
+		REPORT_FATAL(filename, __FUNCTION__, msg.str());
+		exit(EXIT_FAILURE);
+	}
+
+	if (!mOnfiChanUtilReportCsv->openFile())
+	{
+		std::ostringstream msg;
+		msg.str("");
+		msg << "ONFI_CHANNEL_UTILIZATION_REPORT LOG: "
+			<< " ERROR OPENING FILE" << std::endl;
+		REPORT_FATAL(filename, __FUNCTION__, msg.str());
+		exit(EXIT_FAILURE);
+	}
+#pragma endregion FILE_OPEN
+}
 }
