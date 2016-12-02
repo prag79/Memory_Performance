@@ -661,11 +661,6 @@ namespace  CrossbarTeraSLib {
 		/*Push the WRITE command into the long queue */
 		mAlcq.at(chanNum).pushQueue(queueVal);
 
-		/*Set the corresponding bank to busy*/
-		mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY;
-
-		/*For thread synchronization*/
-		wait(SC_ZERO_TIME);
 	}
 
 	void TeraSPCIeController::pushShortQueueCmd(uint8_t chanNum, uint8_t cwBankIndex, ActiveCmdQueueData queueVal)
@@ -723,12 +718,12 @@ namespace  CrossbarTeraSLib {
 		}
 	}
 
-	void TeraSPCIeController::setCmdDispatcherBankStatus(uint8_t chanNum)
+	void TeraSPCIeController::checkCmdDispatcherBankStatus(uint8_t chanNum)
 	{
 		/*This loop sweeps through all the heads of the bank link list
 		if there are no commands pointed to by the head it makes the corresponding
 		Cmd Dispatcher bank status to busy, so that when the command dispatcher finds that all the
-		banks for a particular channel are busy, it goes into wait state, preventing this thread from polling continuosly
+		banks for a particular channel are busy, it goes into wait state, preventing this thread from polling continuously
 		thereby increasing simulation performance */
 		for (uint16_t cwBankIndex = 0; cwBankIndex < mCodeWordNum; cwBankIndex++)
 		{
@@ -746,6 +741,12 @@ namespace  CrossbarTeraSLib {
 			}
 		}
 
+
+	}
+
+	void TeraSPCIeController::pollCmdDispatcherBankStatus(uint8_t chanNum)
+	{
+
 		/*This loop checks the status of all the banks and then goes into wait state if
 		all the banks are busy, it wakes up only when either the bank becomes free,indicating the bank command
 		processing is done or new command is added to the linked list  */
@@ -761,7 +762,6 @@ namespace  CrossbarTeraSLib {
 			else
 				break;
 		}
-
 	}
 #pragma endregion
 
@@ -984,8 +984,9 @@ namespace  CrossbarTeraSLib {
 		{
 			/*The command dispatcher only enters into arbitration if there is any bank free
 			else it waits for any of the bank to be free*/
-			setCmdDispatcherBankStatus(chanNum);
-						
+			checkCmdDispatcherBankStatus(chanNum);
+			
+			pollCmdDispatcherBankStatus(chanNum);
 			/*Command dispatcher goes over every logical bank link list to find out
 			which one is free and then dispatches command from that queue address that corresponds to that
 			particular bank */
@@ -1033,6 +1034,9 @@ namespace  CrossbarTeraSLib {
 
 						pushLongQueueCmd(chanNum, cwBankIndex, queueVal);
 
+						/*Make corresponding Bank and DL2 busy*/
+						mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY; //Make it busy
+						mPhyDL2Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY;
 					}//if (mCwBankStatus.at(chanNum).at(cwBankIndex) == false)
 					
 				}//if(!-1)
@@ -1300,6 +1304,11 @@ namespace  CrossbarTeraSLib {
 						value.plba = cmd.plba;
 						value.queueNum = cmd.queueNum;
 
+						uint16_t cwBankIndex = getCwBankIndex(cmd.plba);
+
+						/*Make DL1 status free again*/
+						mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+						mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
 						/*Push READ Command into the DMA queue*/
 						mAdcq.at(chanNum).pushQueue(value);
 						/*Notify that there is command in the ADCQ*/
@@ -1322,7 +1331,7 @@ namespace  CrossbarTeraSLib {
 							<< " Channel Number= " << dec << (uint32_t)chanNum
 							<< endl;
 
-						wait(SC_ZERO_TIME);
+						//wait(SC_ZERO_TIME);
 
 					}//if(READ)
 				}//if (!mAdcq.at(chanNum).isFull())
@@ -1433,7 +1442,7 @@ namespace  CrossbarTeraSLib {
 		}//while
 
 	}
-
+#if 0
 	void TeraSPCIeController::pendingReadCmdMethod(uint8_t chanNum)
 	{
 		ActiveCmdQueueData cmd;
@@ -1461,7 +1470,7 @@ namespace  CrossbarTeraSLib {
 
 					mPendingReadCmdQueue.at(chanNum)->erase();
 
-					/*Decode pending queue entry*/
+					//Decode pending queue entry
 					decodePendingCmdEntry(cmd, ctype, lba, iTag, chipSelect, queueAddr);
 
 					if (ctype == READ)
@@ -1512,7 +1521,7 @@ namespace  CrossbarTeraSLib {
 			}//while
 		}
 	}
-
+#endif
 	void TeraSPCIeController::checkRespMethod(uint8_t chanNum)
 	{
 		tlm::tlm_generic_payload *payloadPtr;
@@ -1590,116 +1599,102 @@ namespace  CrossbarTeraSLib {
 			
 		while (1)
 		{
-			//wait(*mReadDataSendEvent.at(chanNum));
 			if (mDMAQueueData.at(chanNum).empty())
 			{
 				wait();
 			}
 			else
 			{
-
 				/*Check if MEM_WRITE_DATA queue is full*/
 				if (mTLPQueueMgr.isFull(TLPQueueType::MEM_WRITE_DATA_Q))
 				{
-					//next_trigger(mMemWriteDataQNotFullEvent);
 					wait(mMemWriteDataQNotFullEvent);
 				}
-				/*else
-				{*/
-					ActiveDMACmdQueueData queueData = mDMAQueueData.at(chanNum).front();
-					mDMAQueueData.at(chanNum).pop();
-					
-					/*Save the read data in the Read Data Buffer*/
-					mReadDataBuff.writeData(queueData.buffPtr, mReadData.at(chanNum));
-					//wait(mMemWriteDataQNotFullEvent);
 
-					uint32_t offset;
-					uint64_t hAddr0;
-					uint64_t hAddr1;
-					uint64_t subCmdAddress;
+				ActiveDMACmdQueueData queueData = mDMAQueueData.at(chanNum).front();
+				mDMAQueueData.at(chanNum).pop();
 
-					/* Get Sub Command offset*/
-					mCmdQueue.getCmdOffset(queueData.queueNum, offset);
+				/*Save the read data in the Read Data Buffer*/
+				mReadDataBuff.writeData(queueData.buffPtr, mReadData.at(chanNum));
 
-					/*Get Host Memory base address*/
-					//mParamTable.getHostAddr(queueData.iTag, hAddr0, hAddr1);
-					uint64_t hostAddress = mHostCmdQueue.getHostAddress(queueData.iTag);
+				uint32_t offset;
+				uint64_t hAddr0;
+				uint64_t hAddr1;
+				uint64_t subCmdAddress;
 
-					/*Calculate the sub command memory address*/
-					uint64_t dataAddress = hostAddress + offset * mCwSize;
+				/* Get Sub Command offset*/
+				mCmdQueue.getCmdOffset(queueData.queueNum, offset);
 
-					/* Fetch data from the data buffer*/
-					uint8_t* data = mMemMgr.getPtr(mCwSize);
-					mReadDataBuff.readData(queueData.buffPtr, data);
+				/*Get Host Memory base address*/
+				uint64_t hostAddress = mHostCmdQueue.getHostAddress(queueData.iTag);
 
-					mRdBuffPtrQueue.push(queueData.buffPtr);
-			
+				/*Calculate the sub command memory address*/
+				uint64_t dataAddress = hostAddress + offset * mCwSize;
 
-					/*Create Memory Write TLP*/
-					createMemWriteTLP(dataAddress, hostQueueType::DATA, queueData.queueNum, data);
+				/* Fetch data from the data buffer*/
+				uint8_t* data = mMemMgr.getPtr(mCwSize);
+				mReadDataBuff.readData(queueData.buffPtr, data);
 
-					
-					/* Set the PCMDQ entry to free status*/
-					mCmdQueue.setQueueFree(queueData.queueNum);
+				mRdBuffPtrQueue.push(queueData.buffPtr);
 
-					/*notify presence of space in the PCMD queue*/
-					mCmdQNotFullEvent.notify(SC_ZERO_TIME);
-					//mArbiterToken.push(3);
-					/* Notify TLP Manager to arbitrate on the bus */
-					mArbitrateEvent.notify(SC_ZERO_TIME);
-					/*Wait for data being transferred*/
-					//wait(mDataTxDoneEvent);
+				/*Create Memory Write TLP*/
+				createMemWriteTLP(dataAddress, hostQueueType::DATA, queueData.queueNum, data);
 
-					uint8_t cwBankIndex;
-					uint32_t page;
-					bool chipSelect;
+				/* Set the PCMDQ entry to free status*/
+				mCmdQueue.setQueueFree(queueData.queueNum);
 
-					decodeLBA(queueData.plba, cwBankIndex, chipSelect, page);
-					if ((cwBankIndex == 1) && (mCwBankMaskBits == 1) && (mBankNum <= (mCwSize / mPageSize)))
-					{
-						cwBankIndex = 0;
-						chipSelect = 1;
-					}
-					if ((chipSelect == 1) && (mNumDie == 1))
-					{
-						chipSelect = 0;
-						page++;
-						if (page == mPageNum)
-						{
-							page = 0;
-						}
-					}
-					if (chipSelect && (mNumDie > 1))
-						cwBankIndex = cwBankIndex + mCodeWordNum / mNumDie;
+				/*notify presence of space in the PCMD queue*/
+				mCmdQNotFullEvent.notify(SC_ZERO_TIME);
 
-					/*Set the bank status to free*/
-					mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+				/* Notify TLP Manager to arbitrate on the bus */
+				mArbitrateEvent.notify(SC_ZERO_TIME);
 
-					/*Notify command dispatcher to send command to this bank*/
-					mTrigCmdDispEvent.at(chanNum)->notify(SC_ZERO_TIME);
-					
-					/* Decrement the running count*/
-					mRunningCntTable.updateCnt(queueData.iTag);
+				uint8_t cwBankIndex;
+				uint32_t page;
+				bool chipSelect;
 
-					/*Get the running count*/
-					uint16_t cnt = mRunningCntTable.getRunningCnt(queueData.iTag);
-
-					//Check if running count goes down to zero
-					if (!cnt)
-					{
-						/*Host command queue is free*/
-						sc_time currTime = sc_time_stamp();
-						mDMAActiveCmdQueueData.push(queueData);
-						mReadDoneEvent.notify(SC_ZERO_TIME);
-						//wait(mTrigReadsCmdCmpltEvent);
-						//wait(SC_ZERO_TIME);
-					}
-				//}
-				//}
-				/*else
+				decodeLBA(queueData.plba, cwBankIndex, chipSelect, page);
+				if ((cwBankIndex == 1) && (mCwBankMaskBits == 1) && (mBankNum <= (mCwSize / mPageSize)))
 				{
-				next_trigger(mMemWriteDataQNotFullEvent);
-				}*/
+					cwBankIndex = 0;
+					chipSelect = 1;
+				}
+				if ((chipSelect == 1) && (mNumDie == 1))
+				{
+					chipSelect = 0;
+					page++;
+					if (page == mPageNum)
+					{
+						page = 0;
+					}
+				}
+				if (chipSelect && (mNumDie > 1))
+					cwBankIndex = cwBankIndex + mCodeWordNum / mNumDie;
+
+				/*Set the bank status to free*/
+				mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+				mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+
+				/*Notify command dispatcher to send command to this bank*/
+				mTrigCmdDispEvent.at(chanNum)->notify(SC_ZERO_TIME);
+
+				/* Decrement the running count*/
+				mRunningCntTable.updateCnt(queueData.iTag);
+
+				/*Get the running count*/
+				uint16_t cnt = mRunningCntTable.getRunningCnt(queueData.iTag);
+
+				//Check if running count goes down to zero
+				if (!cnt)
+				{
+					/*Host command queue is free*/
+					sc_time currTime = sc_time_stamp();
+					mDMAActiveCmdQueueData.push(queueData);
+					mReadDoneEvent.notify(SC_ZERO_TIME);
+					//wait(mTrigReadsCmdCmpltEvent);
+					//wait(SC_ZERO_TIME);
+				}
+
 			}
 		}
 	}
@@ -1730,14 +1725,7 @@ namespace  CrossbarTeraSLib {
 				mTrigReadsCmdCmpltEvent.notify(SC_ZERO_TIME);
 				
 				mCmdDoneTagQueue.push(queueData.iTag);
-				//mHostCmdQueue.setQueueFree(queueData.iTag);
 				
-				
-				/*Set Tag in the Tag manager to free status*/
-				//mTagMgr.resetTag(queueData.iTag);
-
-				//mCmpltTagQueue.push(queueData.iTag);
-
 				/* CQ1 is full then invert the phase tag to let the host
 				know that the queue has gone through one cycle.*/
 				
@@ -1753,10 +1741,7 @@ namespace  CrossbarTeraSLib {
 						<< endl;
 					mPhaseTagCQ1 = !mPhaseTagCQ1;
 				}
-				/*If MEM_WRITE COMPLETION queue is full, then wait*/
-				//wait(mMemWriteCompQNotFullEvent);
-
-
+				
 				uint16_t cid;
 				cmdType cmd;
 				uint64_t lba, addr0, addr1;
@@ -1794,19 +1779,7 @@ namespace  CrossbarTeraSLib {
 				mLogFileHandler << "READ CMD COMPLETION QUEUE PUSH: "
 					<< " @Time= " << dec << (sc_time_stamp().to_double()) << " ns"
 					<< endl;
-				/*}
-				else
-				{
-				next_trigger(mMemWriteCompQNotFullEvent);
-				}
-				}
-				else
-				{
-				next_trigger(mCQ1HdblEvent);
-				}*/
-				
-				//wait();
-				//wait(mCmdTxDoneEvent);
+			
 			}
 		}
 	}
@@ -2814,6 +2787,12 @@ namespace  CrossbarTeraSLib {
 		qData.plba = activeQueue.plba;
 		qData.queueNum = activeQueue.queueNum;
 		qData.time = activeQueue.time;
+	}
+
+	uint16_t TeraSPCIeController::getCwBankIndex(const uint64_t& lba)
+	{
+		uint16_t cwBank = (uint16_t)((lba) & getCwBankMask());
+		return cwBank;
 	}
 #pragma endregion MEMBER_FUNCTIONS
 

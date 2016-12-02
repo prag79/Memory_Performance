@@ -64,9 +64,14 @@ namespace  CrossbarTeraSLib {
 
 		while (1)
 		{
-
-			setCmdDispatcherBankStatus(chanNum);
+			/*loops through corresponding banks linked list head, if there is no command left
+			then makes the corresponding bank's status so that the dispatcher opts out of polling that 
+			bank repeatedly */
+			checkCmdDispatcherBankStatus(chanNum);
 			
+			/*If all the command dispatchers bank status is busy, it means there are no
+			commands left in the HEAD of the linked list to be processed, go into wait state*/
+			pollCmdDispatcherBankStatus(chanNum);
 			
 
 			for (uint16_t cwBankIndex = 0; cwBankIndex < mCodeWordNum; cwBankIndex++)
@@ -270,6 +275,7 @@ namespace  CrossbarTeraSLib {
 					
 					/*Make DL1 status free again*/
 					mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+					mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
 
 					lba |= ((uint64_t)chanNum & 0x0F);
 					msg.str("");
@@ -914,7 +920,7 @@ namespace  CrossbarTeraSLib {
 			(((uint64_t)lba | 0x0000000000000000) << 9) | (cwCnt & 0x1ff);
 	}
 
-	void TeraSController::setCmdDispatcherBankStatus(uint8_t chanNum)
+	void TeraSController::checkCmdDispatcherBankStatus(uint8_t chanNum)
 	{
 
 		/*This loop sweeps through all the heads of the bank link list
@@ -938,8 +944,13 @@ namespace  CrossbarTeraSLib {
 			}
 		}
 
+		
+	}
+
+	void TeraSController::pollCmdDispatcherBankStatus(uint8_t chanNum)
+	{
 		/*This loop checks the status of all the banks and then goes into wait state if
-		all the banks are busy, it wakes up only when either the bank becomes free,indicating the bank command 
+		all the banks are busy, it wakes up only when either the bank becomes free,indicating the bank command
 		processing is done or new command is added to the linked list  */
 		for (uint16_t cwBankIndex = 0; cwBankIndex < mCodeWordNum; cwBankIndex++)
 		{
@@ -954,7 +965,6 @@ namespace  CrossbarTeraSLib {
 				break;
 		}
 	}
-
 	cmdType TeraSController::getPhysicalCmdType(const uint64_t& cmd)
 	{
 		uint8_t ctype = (cmd >> (mLBAMaskBits + 9)) & 0x3;
@@ -1747,6 +1757,7 @@ namespace  CrossbarTeraSLib {
 	uint16_t TeraSController::getCwBankIndex(const uint16_t& lba)
 	{
 		uint16_t cwBank = (uint16_t)((lba >> 9) & getCwBankMask());
+		return cwBank;
 	}
 #pragma endregion
 	

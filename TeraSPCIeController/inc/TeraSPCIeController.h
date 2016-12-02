@@ -215,7 +215,11 @@ namespace  CrossbarTeraSLib {
 
 		void processBankLinkList(uint16_t cwBankIndex, uint8_t chanNum, int32_t& nextAddr);
 
-		void setCmdDispatcherBankStatus(uint8_t chanNum);
+		void checkCmdDispatcherBankStatus(uint8_t chanNum);
+
+		void pollCmdDispatcherBankStatus(uint8_t chanNum);
+
+		uint16_t getCwBankIndex(const uint64_t& lba);
 #pragma endregion MEMBER_FUNCTIONS
 
 #pragma region INTERFACE_METHODS_HELPER
@@ -433,7 +437,7 @@ namespace  CrossbarTeraSLib {
 		* @param chanNum Channel Number
 		* @return void
 		**/
-		void pendingReadCmdMethod(uint8_t chanNum);
+	//	void pendingReadCmdMethod(uint8_t chanNum);
 
 		/** checkRespProcess
 		* Final Phase of transaction processing

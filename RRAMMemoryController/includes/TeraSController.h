@@ -347,8 +347,8 @@ namespace CrossbarTeraSLib {
 		void DispatchLongQueue(uint8_t chanNum, uint64_t queueVal, sc_core::sc_time timeVal, uint16_t cwBankIndex);
 		void DispatchShortQueue(uint8_t chanNum, uint64_t queueVal, sc_core::sc_time timeVal, uint16_t cwBankIndex);
 		void cmdDispatcherProcess(uint8_t chanNum);
-		void setCmdDispatcherBankStatus(uint8_t chanNum);
-
+		void checkCmdDispatcherBankStatus(uint8_t chanNum);
+		void pollCmdDispatcherBankStatus(uint8_t chanNum);
 		
 		void chanManagerProcess(uint8_t chanNum);
 		void pendingWriteCmdProcess(uint8_t chanNum);
