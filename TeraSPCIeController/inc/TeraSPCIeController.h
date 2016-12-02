@@ -142,7 +142,6 @@ namespace  CrossbarTeraSLib {
 
 			createReportFiles();
 
-
 		}
 
 		~TeraSPCIeController();
@@ -213,6 +212,10 @@ namespace  CrossbarTeraSLib {
 		void initChannelSpecificParameters();
 
 		void createReportFiles();
+
+		void processBankLinkList(uint16_t cwBankIndex, uint8_t chanNum, int32_t& nextAddr);
+
+		void setCmdDispatcherBankStatus(uint8_t chanNum);
 #pragma endregion MEMBER_FUNCTIONS
 
 #pragma region INTERFACE_METHODS_HELPER
@@ -526,8 +529,8 @@ namespace  CrossbarTeraSLib {
 		std::vector<sc_event* > mChipSelectTxEvent;
 		std::vector<sc_event* > mDispatchCmdEvent;
 		std::vector<sc_event* > mDispatchWriteCmdEvent;
-		std::vector<sc_event*> mReadDataRxEvent;
-		std::vector<sc_event*> mWriteDataSentEvent;
+		std::vector<sc_event*>  mReadDataRxEvent;
+		std::vector<sc_event*>  mWriteDataSentEvent;
 		std::vector<sc_event* > mDispatchOnBuffFreeEvent;
 		/*Write Buffer has space event, it is triggered for each 
 		channel*/
@@ -557,8 +560,6 @@ namespace  CrossbarTeraSLib {
 		sc_event mCmplTLPRxDataEvent;
 		
 		
-		
-
 #pragma endregion EVENT_VARIABLES
 
 		
@@ -590,6 +591,10 @@ namespace  CrossbarTeraSLib {
 		std::vector<std::unique_ptr<PendingCmdQueueManager> > mPendingCmdQueue;
 		std::vector<std::unique_ptr<PendingCmdQueueManager> > mPendingReadCmdQueue;
 		std::vector<std::vector<cwBankStatus> > mCwBankStatus;
+
+		/*Physical data Latch1 and Data Latch2 status*/
+		std::vector<std::vector<cwBankStatus> > mPhyDL1Status;
+		std::vector<std::vector<cwBankStatus> > mPhyDL2Status;
 	
 		std::vector<uint8_t> mAvailableCredit;
 		std::vector<CmdLatencyData> mLatency;

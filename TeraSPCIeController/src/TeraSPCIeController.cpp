@@ -699,11 +699,69 @@ namespace  CrossbarTeraSLib {
 
 		/*Notify presence of command in the short queue */
 		mAscqNotEmptyEvent.at(chanNum)->notify(SC_ZERO_TIME);
-		
-		/*Set the corresponding bank busy*/
-		mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY; //Make it busy
+	}
 
-		//wait(SC_ZERO_TIME);
+	void TeraSPCIeController::processBankLinkList(uint16_t cwBankIndex, uint8_t chanNum, int32_t& nextAddr)
+	{
+		int32_t tailAddr;
+
+		/*get tail address from the bank link list*/
+		mBankLinkList.getTail(chanNum, cwBankIndex, tailAddr);
+
+
+		//mCmdQueue.fetchNextAddress(queueHead.at(chanNum).at(cwBankIndex), nextAddr);
+		/*If we come to the end of LL i.e head = tail the reset the
+		head and tail linked list to -1*/
+		if (queueHead.at(chanNum).at(cwBankIndex) == tailAddr)
+		{
+			mBankLinkList.updateHead(chanNum, cwBankIndex, -1);
+			mBankLinkList.updateTail(chanNum, cwBankIndex, -1);
+		}
+		/*else update the head with the next address of the command queue */
+		else {
+			mBankLinkList.updateHead(chanNum, cwBankIndex, nextAddr);
+		}
+	}
+
+	void TeraSPCIeController::setCmdDispatcherBankStatus(uint8_t chanNum)
+	{
+		/*This loop sweeps through all the heads of the bank link list
+		if there are no commands pointed to by the head it makes the corresponding
+		Cmd Dispatcher bank status to busy, so that when the command dispatcher finds that all the
+		banks for a particular channel are busy, it goes into wait state, preventing this thread from polling continuosly
+		thereby increasing simulation performance */
+		for (uint16_t cwBankIndex = 0; cwBankIndex < mCodeWordNum; cwBankIndex++)
+		{
+			queueHead.at(chanNum).at(cwBankIndex) = mBankLinkList.getHead(chanNum, cwBankIndex);
+			if (queueHead.at(chanNum).at(cwBankIndex) == -1)
+			{
+				mCmdDispBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY;
+			}
+			else if (mCwBankStatus.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_BUSY)
+			{
+				mCmdDispBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY;
+			}
+			else {
+				mCmdDispBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+			}
+		}
+
+		/*This loop checks the status of all the banks and then goes into wait state if
+		all the banks are busy, it wakes up only when either the bank becomes free,indicating the bank command
+		processing is done or new command is added to the linked list  */
+		for (uint16_t cwBankIndex = 0; cwBankIndex < mCodeWordNum; cwBankIndex++)
+		{
+			if (mCmdDispBankStatus.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_BUSY)
+			{
+				if (cwBankIndex == (mCodeWordNum - 1))
+				{
+					wait(*(mCmdDispatchEvent.at(chanNum)) | *(mTrigCmdDispEvent.at(chanNum)));
+				}
+			}
+			else
+				break;
+		}
+
 	}
 #pragma endregion
 
@@ -926,37 +984,8 @@ namespace  CrossbarTeraSLib {
 		{
 			/*The command dispatcher only enters into arbitration if there is any bank free
 			else it waits for any of the bank to be free*/
-			for (uint16_t cwBankIndex = 0; cwBankIndex < mCodeWordNum; cwBankIndex++)
-			{
-				
-				queueHead.at(chanNum).at(cwBankIndex) = mBankLinkList.getHead(chanNum, cwBankIndex);
-				
-				if (queueHead.at(chanNum).at(cwBankIndex) == -1)
-				{
-					mCmdDispBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY;
-				}
-				else if (mCwBankStatus.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_BUSY)
-				{
-					mCmdDispBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY;
-				}
-				else {
-					mCmdDispBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
-				}
-			}
-
-			for (uint16_t cwBankIndex = 0; cwBankIndex < mCodeWordNum; cwBankIndex++)
-			{
-				if (mCmdDispBankStatus.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_BUSY)
-				{
-					if (cwBankIndex == (mCodeWordNum - 1))
-					{
-						wait(*(mCmdDispatchEvent.at(chanNum)) | *(mTrigCmdDispEvent.at(chanNum)));
-					}
-				}
-				else
-					break;
-			}
-
+			setCmdDispatcherBankStatus(chanNum);
+						
 			/*Command dispatcher goes over every logical bank link list to find out
 			which one is free and then dispatches command from that queue address that corresponds to that
 			particular bank */
@@ -967,48 +996,43 @@ namespace  CrossbarTeraSLib {
 				if (queueHead.at(chanNum).at(cwBankIndex) != -1)
 				{
 					// if Bank is busy then it goes to the next link list
-					if (mCwBankStatus.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_FREE)//if not busy
+					cmdType cmd;
+					uint64_t lba;
+					uint32_t cmdOffset;
+					uint32_t iTag;
+					sc_core::sc_time timeVal;
+					int32_t nextAddr;
+					/*Fetch command from the address pointed to by the head of the link list*/
+					mCmdQueue.fetchCommand(queueHead.at(chanNum).at(cwBankIndex), cmd, lba, cmdOffset, iTag, nextAddr, timeVal);
+					
+					/* Check for data latch status and the type of command
+					 to determine which queue to push command into*/
+					if (mPhyDL1Status.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_FREE && cmd == cmdType::READ)
 					{
-						cmdType cmd;
-						int32_t nextAddr;
 						ActiveCmdQueueData queueVal;
-						uint64_t lba;
-						uint32_t cmdOffset;
-						uint32_t iTag;
-						sc_core::sc_time timeVal;
 
-						int32_t tailAddr;
+						/*Update Head and Tail*/
+						processBankLinkList(cwBankIndex, chanNum, nextAddr);
+						/*Ready to dispatch command to the active queue, create active queue command entry*/
+						createActiveCmdEntry(cmd, lba, cmdOffset, iTag, queueHead.at(chanNum).at(cwBankIndex), timeVal, queueVal);
+					
+						pushShortQueueCmd(chanNum, cwBankIndex, queueVal);
 
-						/*get tail address from the bank link list*/
-						mBankLinkList.getTail(chanNum, cwBankIndex, tailAddr);
+						/*Make corresponding Bank and DL1 busy*/
+						mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY; //Make it busy
+						mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY;
+					}
+					else if (mPhyDL2Status.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_FREE && cmd == cmdType::WRITE)
+					{  //In case of Write
 
-						/*Fetch command from the address pointed to by the head of the link list*/
-						mCmdQueue.fetchCommand(queueHead.at(chanNum).at(cwBankIndex), cmd, lba, cmdOffset, iTag, nextAddr, timeVal);
-						//mCmdQueue.fetchNextAddress(queueHead.at(chanNum).at(cwBankIndex), nextAddr);
-						/*If we come to the end of LL i.e head = tail the reset the
-						head and tail linked list to -1*/
-						if (queueHead.at(chanNum).at(cwBankIndex) == tailAddr)
-						{
-							mBankLinkList.updateHead(chanNum, cwBankIndex, -1);
-							mBankLinkList.updateTail(chanNum, cwBankIndex, -1);
-						}
-						/*else update the head with the next address of the command queue */
-						else {
-							mBankLinkList.updateHead(chanNum, cwBankIndex, nextAddr);
-						}
-
+						ActiveCmdQueueData queueVal;
+						/*Update Head and Tail*/
+						processBankLinkList(cwBankIndex, chanNum, nextAddr);
 						/*Ready to dispatch command to the active queue, create active queue command entry*/
 						createActiveCmdEntry(cmd, lba, cmdOffset, iTag, queueHead.at(chanNum).at(cwBankIndex), timeVal, queueVal);
 
-						if (cmd == READ) // In case of Read
-						{
-							sc_time currTime = sc_time_stamp();
-							pushShortQueueCmd(chanNum, cwBankIndex, queueVal);
-						}
-						else {  //In case of Write
-							
-							pushLongQueueCmd(chanNum, cwBankIndex, queueVal);
-						}
+						pushLongQueueCmd(chanNum, cwBankIndex, queueVal);
+
 					}//if (mCwBankStatus.at(chanNum).at(cwBankIndex) == false)
 					
 				}//if(!-1)
@@ -3025,6 +3049,9 @@ void TeraSPCIeController::initChannelSpecificParameters()
 		mCmdDispBankStatus.push_back(std::vector<cwBankStatus>(mCodeWordNum, cwBankStatus::BANK_FREE));
 		mCwBankStatus.push_back(std::vector<cwBankStatus>(mCodeWordNum, cwBankStatus::BANK_FREE));
 
+		mPhyDL1Status.push_back(std::vector<cwBankStatus>(mCodeWordNum, cwBankStatus::BANK_FREE));
+		mPhyDL2Status.push_back(std::vector<cwBankStatus>(mCodeWordNum, cwBankStatus::BANK_FREE));
+
 		queueHead.push_back(std::vector<int32_t>(mCodeWordNum, -1));
 		queueTail.push_back(std::vector<int32_t>(mCodeWordNum, -1));
 
@@ -3219,4 +3246,7 @@ void TeraSPCIeController::createReportFiles()
 	}
 #pragma endregion FILE_OPEN
 }
+
+
+
 }

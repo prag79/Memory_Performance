@@ -67,18 +67,7 @@ namespace  CrossbarTeraSLib {
 
 			setCmdDispatcherBankStatus(chanNum);
 			
-			for (uint16_t cwBankIndex = 0; cwBankIndex < mCodeWordNum; cwBankIndex++)
-			{
-				if (mCmdDispBankStatus.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_BUSY)
-				{
-					if (cwBankIndex == (mCodeWordNum - 1))
-					{
-						wait(*(mCmdDispatchEvent.at(chanNum)) | *(mTrigCmdDispEvent.at(chanNum)));
-					}
-				}
-				else
-					break;
-			}
+			
 
 			for (uint16_t cwBankIndex = 0; cwBankIndex < mCodeWordNum; cwBankIndex++)
 			{
@@ -927,6 +916,12 @@ namespace  CrossbarTeraSLib {
 
 	void TeraSController::setCmdDispatcherBankStatus(uint8_t chanNum)
 	{
+
+		/*This loop sweeps through all the heads of the bank link list
+		 if there are no commands pointed to by the head it makes the corresponding
+		 Cmd Dispatcher bank status to busy, so that when the command dispatcher finds that all the 
+		 banks for a particular channel are busy, it goes into wait state, preventing this thread from polling continuosly
+		 thereby increasing simulation performance */
 		for (uint16_t cwBankIndex = 0; cwBankIndex < mCodeWordNum; cwBankIndex++)
 		{
 			queueHead.at(chanNum).at(cwBankIndex) = mBankLinkList.getHead(chanNum, cwBankIndex);
@@ -941,6 +936,22 @@ namespace  CrossbarTeraSLib {
 			else {
 				mCmdDispBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
 			}
+		}
+
+		/*This loop checks the status of all the banks and then goes into wait state if
+		all the banks are busy, it wakes up only when either the bank becomes free,indicating the bank command 
+		processing is done or new command is added to the linked list  */
+		for (uint16_t cwBankIndex = 0; cwBankIndex < mCodeWordNum; cwBankIndex++)
+		{
+			if (mCmdDispBankStatus.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_BUSY)
+			{
+				if (cwBankIndex == (mCodeWordNum - 1))
+				{
+					wait(*(mCmdDispatchEvent.at(chanNum)) | *(mTrigCmdDispEvent.at(chanNum)));
+				}
+			}
+			else
+				break;
 		}
 	}
 
