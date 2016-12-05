@@ -16,7 +16,7 @@
  */
 trafficGenerator::trafficGenerator(uint64_t m, uint32_t c,
 		uint32_t imn, uint32_t imx, uint8_t r, uint8_t s,
-		alignment a, uint64_t sd, uint8_t numDie, uint8_t numBanks) : distLba(0, m + 1), distDir(0, 99),
+		uint8_t numDie, uint8_t numBanks, alignment a, uint64_t sd) : distLba(0, m + 1), distDir(0, 99),
 				maxLba(m), cwSize(c), ioMin(imn), ioMax(imx), rdPct(r),
 				seqPct(s), align(a), seed(sd), mNumDie(numDie), mNumBanks(numBanks)
 {

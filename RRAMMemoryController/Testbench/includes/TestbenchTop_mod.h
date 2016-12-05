@@ -343,7 +343,7 @@ TestBenchTop::TestBenchTop(sc_module_name nm, uint32_t ioSize, uint32_t blockSiz
 	, mNumCmdWrkld(0)
 	, mFirstCmdTime(sc_time(0, SC_NS))
 	, mWrkldIoSize(0)
-	, mTrafficGen(65536, cwSize, 512, ioSize, cmdPct, seqLBAPct)
+	, mTrafficGen(65536, cwSize, 512, ioSize, cmdPct, seqLBAPct, numDie, bankNum)
 	, mPollWaitTime(pollWaitTime)
 	, mCmdCount(0)
 {

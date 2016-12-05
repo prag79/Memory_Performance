@@ -71,10 +71,10 @@ public:
 		uint32_t ioMax,		// Maximum IO size in bytes
 		uint8_t rdPct,		// % of generated command as Read commands
 		uint8_t seqPct,		// % of generated command as sequential commands
-		alignment align = alignment::none,	// IO alignment. IO or None
-		uint64_t seed = 0,	// Seed for random number generator for LBA
 		uint8_t numDie,
-		uint8_t numBanks
+		uint8_t numBanks,
+		alignment align = alignment::none,	// IO alignment. IO or None
+		uint64_t seed = 0	// Seed for random number generator for LBA
 			);
 
 	int writeCommands(int numCmds);
