@@ -127,20 +127,20 @@ struct PhysicalDLStatus
 {
 	PhysicalDLStatus()
 	{
-		mStatus = status::FREE;
+		mStatus = bankStatus::BANK_FREE;
 	}
 
-	status getStatus()
+	bankStatus getStatus()
 	{
 		return mStatus;
 	}
 
-	void setStatus(status& val)
+	void setStatus(bankStatus& val)
 	{
 		mStatus = val;
 	}
 
 private:
-	status mStatus;
+	bankStatus mStatus;
 };
 #endif

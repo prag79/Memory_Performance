@@ -5,6 +5,7 @@
  * 
  * ALL RIGHTS RESERVED.
  *
+ * Author: Pragnajit Datta Roy
  * Description: This file contains detail of TeraS Controller Test bench
  * Related Specifications: 
  * TeraS_Controller_Test Plan_ver0.2.doc
@@ -45,6 +46,8 @@ public:
 		uint32_t slotNum, uint16_t seqLBAPct, uint16_t cmdPct, \
 		uint32_t cmdQueueSize, bool enMultiSim, bool mode, \
 		int numCore, bool enableWrkld, std::string wrkloadFiles, uint32_t pollWaitTime);
+
+	/*Garbage Collector*/
 	~TestBenchTop(){
 		
 		delete[] mData;
@@ -125,8 +128,6 @@ private:
 
 	int mNumCore;
 
-	
-
 	std::vector<testCmdLatencyData> mLatency;
 	std::vector<testCmdLatencyData> mQueueLatency;
 	SlotManager mSlotManagerObj;
@@ -137,6 +138,8 @@ private:
 
 	void testCaseWriteReadThread();
 	
+	void testCacheModelThread();
+
 	/* Processes Commands and saves it in a queue to be submitted 
 	   to the DIMM*/
 	void submissionQueueThread();
@@ -376,10 +379,7 @@ TestBenchTop::TestBenchTop(sc_module_name nm, uint32_t ioSize, uint32_t blockSiz
 		mLatency.push_back(testCmdLatencyData());
 	}
 
-	/*for (uint32_t cmdIndex = 0; cmdIndex < mNumCmd; cmdIndex++)
-	{
-		mQueueLatency.push_back(testCmdLatencyData());
-	}*/
+	
 	SC_HAS_PROCESS(TestBenchTop);
 
 	if (!enableWrkld)
@@ -2609,10 +2609,7 @@ void TestBenchTop::submissionQueueThread()
 	mTrafficGen.openReadModeFile();
     mFreeSpace = mQueueDepth;
 	mFirstCmdTime = sc_time_stamp();
-	//for (int queueIndex = 0; queueIndex < mQueueDepth; queueIndex++)
-	//{
-	//	mCmdQueueIndex.push_back(-1);
-	//}
+	
 	for (uint32_t queueIndex = 0; queueIndex < mQueueDepth; queueIndex++)
 	{
 		if (cmdIndex < mNumCmd)
@@ -2621,17 +2618,11 @@ void TestBenchTop::submissionQueueThread()
 			CmdQueueField queueEntry;
 
 			queueEntry.startDelay = sc_time_stamp().to_double();
-			/*testCmdLatencyData latencyData;
-			latencyData.startDelay = sc_time_stamp().to_double();
-			latencyData.endDelay = 0;
-			latencyData.slotNum = 0;
-			latencyData.isDone = false;
-			mQueueLatency.push_back(latencyData);*/
+		
 			queueEntry.payload = payload;
 			queueEntry.isDispatched = false;
 			queueEntry.isCmdDone = false;
 			mSubQueue.push_back(queueEntry);
-			//mCmdQueueIndex.at(cmdIndex) = cmdIndex;
 			mCmdCount++;
 			cmdIndex++;
 			
@@ -2649,13 +2640,7 @@ void TestBenchTop::submissionQueueThread()
 			mSlotIndexQueue.pop();
 
 			mTrafficGen.getCommands(payload);
-			/*CmdQueueField queueEntry;
-			queueEntry.payload = payload;
-			queueEntry.isDispatched = false;
-			queueEntry.isValid = false;
-			queueEntry.slotNum = slotNum;
-			queueEntry.startDelay = sc_time_stamp().to_double();
-			mSubQueue.push(queueEntry);*/
+			
 			for (std::vector<CmdQueueField>::iterator it = mSubQueue.begin(); it != mSubQueue.end(); it++)
 			{
 				if ((it->slotNum == slotNum) && (it->isDispatched == true) && (it->isCmdDone == true))
@@ -2673,7 +2658,6 @@ void TestBenchTop::submissionQueueThread()
 					break;
 				}
 
-
 			}
 			cmdIndex++;
 			mCmdCount++;
@@ -2689,8 +2673,6 @@ void TestBenchTop::submissionQueueThread()
 
 	}
 }
-
-
 
 bool TestBenchTop::findQueueEntry(std::vector<CmdQueueField>::iterator& index, const uint16_t slotNum)
 {
@@ -2713,5 +2695,175 @@ bool TestBenchTop::findQueueEntry(std::vector<CmdQueueField>::iterator& index, c
 	}
 	return false;
 	
+}
+
+
+void TestBenchTop::testCacheModelThread()
+{
+	uint16_t slotIndex = 0;
+	std::ostringstream msg;
+	uint64_t lba = 0;
+	uint64_t cmdIndex = 0;
+	uint8_t lbaSkipGap = (uint8_t)(mBlockSize / mCwSize);
+	uint8_t queueCount = 0;
+	uint8_t validCount = 0;
+	uint32_t ddrAddress = 0;
+	uint16_t numSlot;
+	bool logIOPS = false;
+	bool firstSlotIndexed = false;
+	uint32_t numSlotsReserved = 0;
+	bool fetchCompletionQueue = false;
+	uint64_t effectiveLba = 0;
+	uint64_t cmdPayload = 0;
+	uint8_t slotReqIndex = 0;
+	uint16_t tags;
+	uint8_t remSlot;
+	//uint8_t numSlotCount = mSlotManagerObj.getNumSlotRequired(mBlockSize, mIoSize, mCwSize, remSlot);//Find number of slots needed to send command
+	bool pollFlag = true;
+	bool slotNotFree = false;
+	cmdField payload;
+	uint64_t maxNumCmd;
+	std::vector<CmdQueueField>::iterator sqPtr;
+	sc_core::sc_time delay = sc_time(0, SC_NS);
+
+	//If Number of commands are less than QD
+	//make QD equal to Number of commands
+	if (mCmdQueueSize > mNumCmd)
+	{
+		mCmdQueueSize = mNumCmd;
+	}
+	mQueueDepth = mCmdQueueSize;
+
+	uint8_t numSlotReq = mSlotManagerObj.getNumSlotRequired(mBlockSize, mIoSize, mCwSize, remSlot);
+
+	if (mIoSize >= mBlockSize)
+	{
+		lbaSkipGap = mBlockSize / mCwSize;
+		maxNumCmd = mNumCmd * (mIoSize / mBlockSize);
+	}
+	else
+	{
+		lbaSkipGap = mIoSize / mCwSize;
+		maxNumCmd = mNumCmd;
+	}
+
+	sendReadWriteCommands(cmdIndex);
+
+	//This loop is run after commands equal to QD is sent
+	while (!mSlotContainer.empty())
+	{
+		uint8_t validCount = 0;
+		CmdQueueField queueEntry;
+
+		getCompletionQueue(queueCount, validCount);
+
+		//if commands are completed
+		if (queueCount)
+		{
+			sc_time currTime = sc_time_stamp();
+			for (uint8_t CmplQIndex = 0; CmplQIndex < validCount; CmplQIndex++)
+			{
+				uint16_t slotIndex = 0;
+
+				//Read one slot
+				readCompletionQueueData(CmplQIndex, slotIndex);
+				freeSlot(slotIndex);
+
+				popSlotFromQueue(slotIndex);
+				if (cmdIndex < maxNumCmd)
+				{
+					if (mCmdCount < mNumCmd)
+					{
+						wait(mTrigCmdDispatchEvent);
+					}
+					//if slot is free and commands are still left to process					
+					if (!slotNotFree)
+					{
+						/*Find the SQ entry which needs to be dispatched*/
+						for (sqPtr = mSubQueue.begin(); sqPtr != mSubQueue.end(); sqPtr++)
+						{
+							if ((sqPtr->isDispatched == false) && (sqPtr->isCmdDone == false))
+							{
+								payload = sqPtr->payload;
+								break;
+							}
+						}
+
+					}
+					//Send sub Commands
+					while (slotReqIndex < numSlotReq)
+					{
+						if (mSlotManagerObj.getAvailableSlot(numSlot))
+						{
+							if (!firstSlotIndexed)
+							{
+								firstSlotIndexed = true;
+								mSlotManagerObj.getFreeTags(tags);
+								mSlotManagerObj.addFirstSlotNum(tags, numSlot);
+								sqPtr->isDispatched = true;
+							}
+							mSlotContainer.push_back(numSlot);
+							slotNotFree = false;
+							mSlotManagerObj.addSlotToList(tags, numSlot);
+							mLogFileHandler << "TestCase: "
+								<< " @Time= " << dec << sc_time_stamp().to_double() << " ns"
+								<< " Slot Number= " << dec << (uint32_t)numSlot
+								<< endl;
+
+							uint64_t tempLba = payload.lba + lba;
+							mLBAReport->writeFile("LBA", sc_time_stamp().to_double(), tempLba, " ");
+							if (payload.d == ioDir::write)
+							{
+								sendWrite(effectiveLba, cmdPayload, numSlot, tempLba);
+							}
+							else
+							{
+								sendRead(effectiveLba, cmdPayload, numSlot, tempLba);
+							}
+
+							cmdIndex++;
+							lba += lbaSkipGap;
+							slotReqIndex++;
+
+						}//if (mSlotManagerObj.getAvailableSlot(numSlot))
+						else
+						{
+							slotNotFree = true;
+							break;
+						}//else
+
+					}//while (slotReqIndex < (int16_t)numSlotCount)
+
+					if (!slotNotFree)
+					{
+						//if all the sub commands are sent
+						slotReqIndex = 0;
+						lba = 0;
+						firstSlotIndexed = false;
+					}
+				}//if (cmdIndex < mNumCmd)
+			}//for(uint8_t CompCmdIndex = 0; CompCmdIndex < validCount; CompCmdIndex++)
+		}//if (queueCount)
+		else
+		{
+			//if command is not there in the completion queue
+			// then wait for some time and poll again
+			wait(mPollWaitTime, SC_NS);
+		}
+
+	}//while (!mSlotQueue.empty())
+
+	if (mSlotContainer.empty())
+	{
+
+		sc_time lastCmdTime = sc_time_stamp();
+		sc_time delayTime = lastCmdTime - mFirstCmdTime;
+		mIOPSReport->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), " ");
+		mIOPSReportCsv->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), ",");
+		logIOPS = true;
+		mTrafficGen.closeReadModeFile();
+		sc_stop();
+	}
+
 }
 #endif

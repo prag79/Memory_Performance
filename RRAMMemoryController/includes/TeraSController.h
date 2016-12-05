@@ -5,8 +5,10 @@
  * 
  * ALL RIGHTS RESERVED.
  *
+ * Author: Pragnajit Datta Roy
  * Description: This file contains detail of TeraS Controller model and
  * its architecture.
+ * Supports both single core and multi core mode
  * Related Specifications: 
  * TeraS_Controller_Specification_ver_1.0.doc
  ********************************************************************/

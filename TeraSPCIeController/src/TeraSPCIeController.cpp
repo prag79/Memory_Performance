@@ -2766,7 +2766,6 @@ namespace  CrossbarTeraSLib {
 		uint64_t address = ((uint64_t)(memBank) | ((uint64_t)(memPage) << mBankMaskBits));
 		return address;
 	}
-
 	void TeraSPCIeController::getCompletionTLPFields(tCompletionTLP* data, uint16_t& byteCnt, uint16_t& compID, uint16_t& reqID, \
 		uint8_t& lwrAddr, uint8_t& tag)
 	{

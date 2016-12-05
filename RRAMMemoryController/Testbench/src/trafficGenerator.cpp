@@ -16,9 +16,9 @@
  */
 trafficGenerator::trafficGenerator(uint64_t m, uint32_t c,
 		uint32_t imn, uint32_t imx, uint8_t r, uint8_t s,
-		alignment a, uint64_t sd) : distLba(0, m + 1), distDir(0, 99),
+		alignment a, uint64_t sd, uint8_t numDie, uint8_t numBanks) : distLba(0, m + 1), distDir(0, 99),
 				maxLba(m), cwSize(c), ioMin(imn), ioMax(imx), rdPct(r),
-				seqPct(s), align(a), seed(sd)
+				seqPct(s), align(a), seed(sd), mNumDie(numDie), mNumBanks(numBanks)
 {
 	
 	if (ioMin > ioMax) {
@@ -68,6 +68,44 @@ int trafficGenerator::writeCommands(int numCmds)
 				nextLba = 0;
 			}
 		} else {
+			uint64_t lba = distLba(rndLba);
+			if (align == alignment::io) {
+				lba -= lba % ioMax;
+			}
+			cmdPayload.lba = lba;
+		}
+		mCmdWrFile << (bool)cmdPayload.d << " " << cmdPayload.lba << " " << cmdPayload.cwCnt << std::endl;
+	}
+	return 0;
+}
+
+
+/**
+* Main interface function to get list of commands from traffic generator
+*
+* It is assumed that cmdPayload is big enough to hold all the commands
+*/
+int trafficGenerator::writeCommandsToSameBanks(int numCmds)
+{
+	int i;
+	cmdField cmdPayload;
+	for (i = 0; i < numCmds; ++i) {
+		uint8_t cmdDir = (uint8_t)distDir(rndDir);
+		if (cmdDir < rdPct) {
+			cmdPayload.d = ioDir::read;
+		}
+		else {
+			cmdPayload.d = ioDir::write;
+		}
+		cmdPayload.cwCnt = ioMax / cwSize;
+		if (seqPct == 100) {
+			cmdPayload.lba = nextLba;
+			nextLba += (ioMax / cwSize) * mNumDie * mNumBanks;
+			if (nextLba >= maxLba) {
+				nextLba = 0;
+			}
+		}
+		else {
 			uint64_t lba = distLba(rndLba);
 			if (align == alignment::io) {
 				lba -= lba % ioMax;

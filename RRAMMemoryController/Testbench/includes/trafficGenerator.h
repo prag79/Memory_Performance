@@ -59,20 +59,26 @@ private:
 	uint64_t nextLba;			// LBA cursor for sequential traffic
 	uint8_t readCnt;
 	uint8_t cmdCnt;
+	uint8_t mNumDie;
+	uint8_t mNumBanks;
 	std::ofstream mCmdWrFile;
 	std::ifstream mCmdRdFile;
 public:
 	trafficGenerator(
-			uint64_t maxLba,	// Max LBA. LBA Size is 512bytes
-			uint32_t cwSize,	// Codeword size in bytes
-			uint32_t ioMin,		// Minimum IO size in bytes
-			uint32_t ioMax,		// Maximum IO size in bytes
-			uint8_t rdPct,		// % of generated command as Read commands
-			uint8_t seqPct,		// % of generated command as sequential commands
-			alignment align = alignment::none,	// IO alignment. IO or None
-			uint64_t seed = 0	// Seed for random number generator for LBA
+		uint64_t maxLba,	// Max LBA. LBA Size is 512bytes
+		uint32_t cwSize,	// Codeword size in bytes
+		uint32_t ioMin,		// Minimum IO size in bytes
+		uint32_t ioMax,		// Maximum IO size in bytes
+		uint8_t rdPct,		// % of generated command as Read commands
+		uint8_t seqPct,		// % of generated command as sequential commands
+		alignment align = alignment::none,	// IO alignment. IO or None
+		uint64_t seed = 0,	// Seed for random number generator for LBA
+		uint8_t numDie,
+		uint8_t numBanks
 			);
+
 	int writeCommands(int numCmds);
+	int writeCommandsToSameBanks(int numCmds);
 	void getCommands(cmdField& payload);
 	int getCommands(cmdField *cmdPayload, int numCmds);
 	void getCommands(cmdField* cmdPayload, int& numCmds, int cpuNum);

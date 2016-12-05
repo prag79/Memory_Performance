@@ -1845,14 +1845,14 @@ namespace  CrossbarTeraSLib {
 			mPendingCmdProcOpt.at(chanIndex)->spawn_method();
 			mPendingCmdProcOpt.at(chanIndex)->set_sensitivity(&mPendingCmdQueue.at(chanIndex)->get_event());
 			mPendingCmdProcOpt.at(chanIndex)->dont_initialize();
-			sc_spawn(sc_bind(&TeraSController::pendingCmdProcess, \
+			sc_spawn(sc_bind(&TeraSController::pendingWriteCmdProcess, \
 				this, chanIndex), sc_gen_unique_name("pendingCmdProcess"), mPendingCmdProcOpt.at(chanIndex));
 
 			mPendingReadCmdProcOpt.push_back(new sc_spawn_options());
 			mPendingReadCmdProcOpt.at(chanIndex)->spawn_method();
 			mPendingReadCmdProcOpt.at(chanIndex)->set_sensitivity(&mPendingReadCmdQueue.at(chanIndex)->get_event());
 			mPendingReadCmdProcOpt.at(chanIndex)->dont_initialize();
-			sc_spawn(sc_bind(&TeraSController::pendingCmdReadProcess, \
+			sc_spawn(sc_bind(&TeraSController::pendingReadCmdProcess, \
 				this, chanIndex), sc_gen_unique_name("pendingCmdReadProcess"), mPendingReadCmdProcOpt.at(chanIndex));
 
 			mCheckRespProcOpt.push_back(new sc_spawn_options());
