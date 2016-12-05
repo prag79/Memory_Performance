@@ -715,10 +715,10 @@ namespace CrossbarTeraSLib {
 			throw "Invalid PageSize !";
 		}
 
-		if ((mDataLatch2Status.at(chanNum) + (bankIndex + numDie * mBankNum))->getStatus() == status::BUSY)
+		if ((mDataLatch2Status.at(chanNum) + (bankIndex + numDie * mBankNum))->getStatus() == cwBankStatus::BANK_BUSY)
 		{
 			memcpy(mEmulationDataCache.at(chanNum) + cwBankIndex * mPageSize, mPhysicalDataLatch2.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, mPageSize);
-			status val = status::FREE;
+			cwBankStatus val = cwBankStatus::BANK_FREE;
 			(mDataLatch2Status.at(chanNum) + (bankIndex + numDie * mBankNum))->setStatus(val);
 		}
 		else
@@ -931,11 +931,11 @@ namespace CrossbarTeraSLib {
 
 	void TeraSMemoryDevice::phyDl2WriteMethod(uint32_t dl2Index)
 	{
-		if (mDataLatch2Status.at(dl2Index)->getStatus() == bankStatus::BANK_FREE && mDataLatch1Status.at(dl2Index)->getStatus() == bankStatus::BANK_BUSY)
+		if (mDataLatch2Status.at(dl2Index)->getStatus() == cwBankStatus::BANK_FREE && mDataLatch1Status.at(dl2Index)->getStatus() == cwBankStatus::BANK_BUSY)
 		{
 			memcpy(mPhysicalDataLatch2.at(dl2Index), mPhysicalDataLatch1.at(dl2Index), mPageSize);
-			bankStatus val1 = bankStatus::BANK_BUSY;
-			bankStatus val2 = bankStatus::BANK_FREE;
+			cwBankStatus val1 = cwBankStatus::BANK_BUSY;
+			cwBankStatus val2 = cwBankStatus::BANK_FREE;
 			mDataLatch2Status.at(dl2Index)->setStatus(val1);
 			mDataLatch1Status.at(dl2Index)->setStatus(val2);
 		}

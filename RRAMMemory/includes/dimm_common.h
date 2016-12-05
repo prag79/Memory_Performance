@@ -15,23 +15,6 @@ enum cmdType {
 	READ = 0,
 	WRITE = 1
 };
-////string appendParameters(string name, uint32_t mBlockSize, uint32_t mQueueDepth);
-//struct CmdExtension : public tlm::tlm_extension<CmdExtension>
-//{ // user defined extension class
-//	CmdExtension()
-//	: queueNum(0) {}
-//
-//	virtual tlm_extension_base* clone() const { // Must override pure virtual clone method
-//		CmdExtension* t = new CmdExtension();
-//		t->queueNum = this->queueNum;
-//		return t;
-//	}
-//	// Must override pure virtual copy_from method
-//	virtual void copy_from(tlm_extension_base const &ext) {
-//		queueNum = static_cast<CmdExtension const &>(ext).queueNum;
-//	}
-//		uint32_t queueNum;
-//};
 
 struct PCMDQueueEntry
 {
@@ -127,7 +110,7 @@ struct PhysicalDLStatus
 {
 	PhysicalDLStatus()
 	{
-		mStatus = bankStatus::BANK_FREE;
+		mStatus = cwBankStatus::BANK_FREE;
 	}
 
 	bankStatus getStatus()
@@ -135,12 +118,12 @@ struct PhysicalDLStatus
 		return mStatus;
 	}
 
-	void setStatus(bankStatus& val)
+	void setStatus(cwBankStatus& val)
 	{
 		mStatus = val;
 	}
 
 private:
-	bankStatus mStatus;
+	cwBankStatus mStatus;
 };
 #endif

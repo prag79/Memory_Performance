@@ -27,6 +27,7 @@
 
 namespace CrossbarTeraSLib {
 	
+
 	class TeraSMemoryDevice : public sc_module {
 	public:
 		std::vector<sc_in<bool>* > pChipSelect;

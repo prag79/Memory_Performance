@@ -227,12 +227,12 @@ namespace CrossbarTeraSLib {
 		COMPLETION_REQ_W_DATA
 	};
 
-	enum bankStatus
+	/*enum bankStatus
 	{
 		BANK_FREE = 0,
 		BANK_BUSY = 1
 	};
-	typedef bankStatus cwBankStatus;
+	typedef bankStatus cwBankStatus;*/
 
 	enum activeQueueType
 	{

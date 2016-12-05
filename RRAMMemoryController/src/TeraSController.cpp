@@ -140,7 +140,7 @@ namespace  CrossbarTeraSLib {
 	{
 		uint64_t cmd;
 		cmdType ctype;
-		uint8_t lba;
+		uint16_t lba;
 		uint16_t cwCnt;
 		uint16_t slotNum;
 		uint8_t queueAddr;
