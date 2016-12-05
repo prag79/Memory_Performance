@@ -17,7 +17,7 @@
 #include <cstdint>
 #include <vector>
 #include <map>
-#include "common.h"
+#include "pcie_common.h"
 
 namespace CrossbarTeraSLib {
 	class DataBufferManager

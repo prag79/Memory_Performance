@@ -35,12 +35,17 @@ public:
 	   pcie = new CrossbarTeraSLib::TeraSPCIeController(sc_gen_unique_name("PCIE"), QueueSize, QueueFactor, BlockSize, BA_MEM + BA_CQ0, BA_MEM + BA_SQ0, \
 								SizeOfCQ, SizeOfSQ, CwSize, ChanNum, PageSize, sc_time(ReadTime, SC_NS), sc_time(ProgramTime, SC_NS), Credit, OnfiSpeed, \
 								BankNum, NumDie, PageNum, EnMultiSim, Mode, CmdTransferTime, IoSize, PcieSpeed, mLogFileHandler, TbQueueDepth, wrBuffSize, rdBuffSize);
+
 			   rram		= new CrossbarTeraSLib::TeraSMemoryDevice(sc_gen_unique_name("TeraSRRAM"), CwSize, NumDie, BankNum, PageNum, PageSize, \
 				   sc_time(ReadTime, SC_NS), sc_time(ProgramTime, SC_NS), OnfiSpeed, ChanNum, BlockSize, TbQueueDepth, EnMultiSim, IoSize, true);
+
 			   tb = new CrossbarTeraSLib::PciTestBench("tb", NumCmd, BlockSize, CwSize, SizeOfSQ, SizeOfCQ, CmdType, PollTime, EnMultiSim, IoSize,\
 				   TbQueueDepth, EnableWorkLoad, WrkloadFiles,SeqLBAPct,CmdPct);
+
 			   router = new Router<2>("router");
+
 			   memory	= new SystemMemory(sc_gen_unique_name("SystemMemory"), sc_time(0, SC_NS),sc_time(0, SC_NS));//system memory read/write time is 0 ns
+
 			   iPcieRC = new pcieRC("iPcieRC", PcieSpeed, QueueSize, CwSize, mLogFileHandler, SizeOfCQ, SizeOfSQ, EnMultiSim, BlockSize, IoSize, TbQueueDepth);
 
 		for (uint8_t chanIndex = 0; chanIndex < ChanNum; chanIndex++)

@@ -14,7 +14,7 @@
 #ifndef RUNNING_CNT_TABLE_H_
 #define RUNNING_CNT_TABLE_H_
 
-#include "Common.h"
+#include "pcie_common.h"
 
 namespace CrossbarTeraSLib {
 	class RunningCntTable

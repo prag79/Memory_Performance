@@ -693,7 +693,7 @@ namespace CrossbarTeraSLib {
 		{
 			throw "Invalid PageSize !";
 		}
-		if ((mDataLatch1Status.at(chanNum) + (bankIndex + numDie* mBankNum))->getStatus()  == status::FREE)
+		if ((mDataLatch1Status.at(chanNum) + (bankIndex + numDie* mBankNum))->getStatus()  == cwBankStatus::BANK_FREE)
 		{
 			//memcpy(mPhysicalDataCache.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, dataPtr, mPageSize);
 			memcpy(mPhysicalDataLatch1.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, dataPtr, mPageSize);

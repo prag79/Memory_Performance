@@ -13,7 +13,7 @@
 
 #ifndef ITAG_LL_MANAGER_H_
 #define ITAG_LL_MANAGER_H_
-#include "Common.h"
+#include "pcie_common.h"
 
 class iTagLinkListManager
 {

@@ -1,6 +1,6 @@
 #ifndef TLP_MANAGER_H_
 #define TLP_MANAGER_H_
-#include "common.h"
+#include "pcie_common.h"
 #include <queue>
 #include <memory>
 //#include <utility>

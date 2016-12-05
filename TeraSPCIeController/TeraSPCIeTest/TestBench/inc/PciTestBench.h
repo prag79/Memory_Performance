@@ -18,7 +18,7 @@
 #include "Config.h"
 #include "Reporting.h"
 #include "Report.h"
-#include "common.h"
+#include "pcie_common.h"
 #include <vector>
 #include "WorkLoadManager.h"
 #include "trafficGenerator.h"

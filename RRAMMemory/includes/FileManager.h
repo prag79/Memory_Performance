@@ -12,7 +12,7 @@
  ********************************************************************/
 #ifndef MODELS_CACHE_MANAGER_H_
 #define MODELS_CACHE_MANAGER_H_
-#include "Common.h"
+#include "dimm_common.h"
 #include <fstream>
 #include <string>
 

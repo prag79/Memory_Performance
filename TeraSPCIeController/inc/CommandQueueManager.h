@@ -6,13 +6,13 @@
  * ALL RIGHTS RESERVED.
  *
  * Description: This file contains detail of the Command Queue used in
- * TeraSMemoryController architecture.
+ * TeraSPCIeController architecture.
  * Related Specifications: 
  * TeraS_Controller_Specification_ver_1.0.doc
  ********************************************************************/
 #ifndef CMD_QUEUE_MANAGER_H_
 #define CMD_QUEUE_MANAGER_H_
-#include "Common.h"
+#include "pcie_common.h"
 #include <map>
 #include <cmath>
 #include "systemc.h"

@@ -15,7 +15,7 @@
 #define __CMD_PARAM_TABLE_H
 
 #include <cstdint>
-#include "common.h"
+#include "pcie_common.h"
 #include <map>
 
 namespace CrossbarTeraSLib {

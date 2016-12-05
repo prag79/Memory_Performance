@@ -4,81 +4,82 @@
 #include<string>
 #include "tlm.h"
 
-enum implementation_type {
-	ARRAY = 0,
-	FILEIO = 1
-};
 
-typedef implementation_type type;
+	enum implementation_type {
+		ARRAY = 0,
+		FILEIO = 1
+	};
 
-enum cmdType {
-	READ = 0,
-	WRITE = 1
-};
+	typedef implementation_type type;
 
-struct PCMDQueueEntry
-{
-	uint64_t cmd;
-	int32_t nextAddr : 32;
-	sc_core::sc_time time;
-	PCMDQueueEntry()
+	enum cmdType {
+		READ = 0,
+		WRITE = 1
+	};
+
+	struct PCMDQueueEntry
 	{
-		reset();
-	}
-	inline void reset()
+		uint64_t cmd;
+		int32_t nextAddr : 32;
+		sc_core::sc_time time;
+		PCMDQueueEntry()
+		{
+			reset();
+		}
+		inline void reset()
+		{
+			cmd = 0;
+			nextAddr = -1;
+			time = sc_core::SC_ZERO_TIME;
+		}
+	};
+	typedef struct PCMDQueueEntry CmdQueueData;
+
+	struct ActiveCmdQueueEntry
 	{
-		cmd = 0;
-		nextAddr = -1;
-		time = sc_core::SC_ZERO_TIME;
-	}
-};
-typedef struct PCMDQueueEntry CmdQueueData;
+		uint64_t cmd;
+		sc_core::sc_time time;
 
-struct ActiveCmdQueueEntry
-{
-	uint64_t cmd;
-	sc_core::sc_time time;
-	
-	ActiveCmdQueueEntry()
+		ActiveCmdQueueEntry()
+		{
+			reset();
+		}
+		inline void reset()
+		{
+			cmd = 0;
+			time = sc_core::SC_ZERO_TIME;
+		}
+	};
+
+	typedef struct ActiveCmdQueueEntry ActiveCmdQueueData;
+
+	struct CmdLatency
 	{
-		reset();
-	}
-	inline void reset()
+		double startDelay;
+		double endDelay;
+		double latency;
+		CmdLatency()
+		{
+			startDelay = 0;
+			endDelay = 0;
+			latency = 0;
+		}
+	};
+	typedef struct CmdLatency CmdLatencyData;
+
+	enum bankStatus
 	{
-		cmd = 0;
-		time = sc_core::SC_ZERO_TIME;
-	}
-};
+		BANK_FREE = 0,
+		BANK_BUSY = 1
+	};
+	typedef bankStatus cwBankStatus;
 
-typedef struct ActiveCmdQueueEntry ActiveCmdQueueData;
-
-struct CmdLatency
-{
-	double startDelay;
-	double endDelay;
-	double latency;
-	CmdLatency()
+	enum activeQueueType
 	{
-		startDelay = 0;
-		endDelay   = 0;
-		latency    = 0;
-	}
-};
-typedef struct CmdLatency CmdLatencyData;
-
-enum bankStatus
-{
-	BANK_FREE = 0,
-	BANK_BUSY = 1
-};
-typedef bankStatus cwBankStatus;
-
-enum activeQueueType
-{
-	SHORT_QUEUE = 0,
-	LONG_QUEUE = 1,
-	NONE= 2
-};
+		SHORT_QUEUE = 0,
+		LONG_QUEUE = 1,
+		NONE = 2
+	};
 
 #define PAGE_BITS 4
 #define CW_BANK_MASK 0xF
@@ -106,24 +107,25 @@ enum activeQueueType
 #define DATA_BUFFER_BIT_SHIFT 6
 #define COMPLETION_WORD_SIZE 2
 
-struct PhysicalDLStatus
-{
-	PhysicalDLStatus()
+	struct PhysicalDLStatus
 	{
-		mStatus = cwBankStatus::BANK_FREE;
-	}
+		PhysicalDLStatus()
+		{
+			mStatus = cwBankStatus::BANK_FREE;
+		}
 
-	bankStatus getStatus()
-	{
-		return mStatus;
-	}
+		bankStatus getStatus()
+		{
+			return mStatus;
+		}
 
-	void setStatus(cwBankStatus& val)
-	{
-		mStatus = val;
-	}
+		void setStatus(cwBankStatus& val)
+		{
+			mStatus = val;
+		}
 
-private:
-	cwBankStatus mStatus;
-};
+	private:
+		cwBankStatus mStatus;
+	};
+
 #endif

@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include <map>
-#include "common.h"
+#include "pcie_common.h"
 #include "MemMgr.h"
 #include "NvmeQueue.h"
 #include "Report.h"

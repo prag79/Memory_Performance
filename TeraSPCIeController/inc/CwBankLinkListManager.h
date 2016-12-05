@@ -13,7 +13,7 @@
 
 #ifndef CW_BANK_LL_MANAGER_H_
 #define CW_BANK_LL_MANAGER_H_
-#include "Common.h"
+#include "pcie_common.h"
 
 class CwBankLinkListManager
 {

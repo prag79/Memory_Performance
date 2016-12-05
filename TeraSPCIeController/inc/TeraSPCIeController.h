@@ -20,6 +20,7 @@
 #include <sysc/communication/sc_mutex.h>
 
 namespace  CrossbarTeraSLib {
+
 	static const char *filename = "TeraSPCIeController.cpp";
 
 	typedef enum activeQueueType qType;

@@ -12,7 +12,7 @@
  ********************************************************************/
 #ifndef PENDING_CMD_QUEUE_MANAGER_H_
 #define PENDING_CMD_QUEUE_MANAGER_H_
-#include "Common.h"
+#include "pcie_common.h"
 #include "systemc.h"
 #include <map>
 

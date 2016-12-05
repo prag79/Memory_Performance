@@ -12,7 +12,7 @@
  ********************************************************************/
 #ifndef ITAG_MANAGER_H_
 #define ITA_MANAGER_H_
-#include "Common.h"
+#include "pcie_common.h"
 #include <map>
 
 namespace CrossbarTeraSLib {

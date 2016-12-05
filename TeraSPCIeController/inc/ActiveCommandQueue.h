@@ -15,7 +15,7 @@
 
 #include<vector>
 #include<cstdint>
-#include "../common/common.h"
+#include "pcie_common.h"
 
 namespace CrossbarTeraSLib {
 	class ActiveCommandQueue

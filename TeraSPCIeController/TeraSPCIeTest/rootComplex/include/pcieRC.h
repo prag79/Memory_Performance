@@ -23,7 +23,7 @@
 #include "MemMgr.h"
 #include "tlp.h"
 #include <queue>
-#include "common.h"
+#include "pcie_common.h"
 #include "Config.h"
 #include "NvmeQueue.h"
 

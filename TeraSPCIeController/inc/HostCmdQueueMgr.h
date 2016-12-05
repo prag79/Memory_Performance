@@ -12,7 +12,7 @@
  ********************************************************************/
 #ifndef HOST_CMD_QUEUE_MANAGER_H_
 #define HOST_CMD_QUEUE_MANAGER_H_
-#include "Common.h"
+#include "pcie_common.h"
 #include <map>
 #include <vector>
 #include <cmath>

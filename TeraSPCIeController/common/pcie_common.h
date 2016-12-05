@@ -3,23 +3,26 @@
 #include<cstdint>
 #include "systemc.h"
 namespace CrossbarTeraSLib {
-//#ifdef PCI_LANE_16
-//#define PCI_BUS_WIDTH 128
-//#else
-//#define PCI_BUS_WIDTH 32
-//#endif
-//#define MEM_RD_CMD_WIDTH 12
-//#define MEM_RD_DATA_WIDTH 12
-//#define MEM_WR_DATA_WIDTH 12
-//#define MEM_WR_COMPLETION_WIDTH 16
-//#define SQ_DATA_WIDTH 64
-//#define HCMD_DATA_WIDTH 20
+#ifdef PCI_LANE_16
+#define PCI_BUS_WIDTH 128
+#else
+#define PCI_BUS_WIDTH 32
+#endif
+#define MEM_RD_CMD_WIDTH 16
+#define EFF_MEM_RD_CMD_WIDTH 12
+#define MEM_RD_DATA_WIDTH 16
+#define MEM_WR_DATA_WIDTH 20
+#define EFF_MEM_WR_DATA_WIDTH 12
+#define MEM_WR_COMPLETION_WIDTH 20
+//#define EFF_MEM_WR_COMPLETION_WIDTH 16
+#define EFF_MEM_WR_COMPLETION_WIDTH 28  //12 byte of WRITE TLP + 16 bytes of Completion Queue Entry
+#define SQ_DATA_WIDTH 64
+#define HCMD_DATA_WIDTH 20
 	//#define SET_CAP_MPSMAX(reg, value) ((reg & 0xFF0FFFFFFFFFFFFFull)| ((value << 52) & 0x00F0000000000000ull))  
 #define GET_TLP_TYPE(reg)        ((reg >> 24) & 0x1F)
 #define GET_TLP_FORMAT(reg)        ((reg >> 29) & 0x3)
 #define GET_TLP_LENGTH(reg) ((reg) & 0x3FF)
 
-	
 	enum cmdType {
 		READ = 0,
 		WRITE = 1,
@@ -100,6 +103,8 @@ namespace CrossbarTeraSLib {
 			cmd = READ;
 			lba = 0;
 			blockCnt = 0;
+			hAddr0 = 0;
+			hAddr1 = 0;
 			//	nextAddr = 0;
 		}
 		uint16_t cid : 16;
@@ -122,7 +127,11 @@ namespace CrossbarTeraSLib {
 		}
 		status buffStatus;
 		uint32_t nextAddr;
-
+		void reset()
+		{
+			buffStatus = status::FREE;
+			nextAddr = 0;
+		}
 	};
 
 	typedef struct DataBufferStatus BufferStatus;
@@ -203,6 +212,52 @@ namespace CrossbarTeraSLib {
 	};
 	typedef struct ActiveDMACmdQueueEntry ActiveDMACmdQueueData;
 
+	struct ReadCmdDispatchEntry
+	{
+		ActiveDMACmdQueueData cmd;
+		int8_t chanNum;
+		
+		ReadCmdDispatchEntry()
+		{
+			reset();
+		}
+		inline void reset()
+		{
+			cmd.cmd = READ;
+			cmd.plba = 0;
+			cmd.cmdOffset = 0;
+			cmd.iTag = 0;
+			cmd.queueNum = 0;
+			cmd.buffPtr = 0;
+			cmd.time = sc_core::SC_ZERO_TIME;
+			chanNum = 0;
+		}
+	};
+	typedef struct ReadCmdDispatchEntry ReadCmdDispatchData;
+
+	struct WriteCmdDispatchEntry
+	{
+		ActiveCmdQueueData cmd;
+		int8_t chanNum;
+
+		WriteCmdDispatchEntry()
+		{
+			reset();
+		}
+		inline void reset()
+		{
+			cmd.cmd = WRITE;
+			cmd.plba = 0;
+			cmd.cmdOffset = 0;
+			cmd.iTag = 0;
+			cmd.queueNum = 0;
+			//cmd.buffPtr = 0;
+			cmd.time = sc_core::SC_ZERO_TIME;
+			chanNum = 0;
+		}
+	};
+	typedef struct WriteCmdDispatchEntry WriteCmdDispatchData;
+
 	struct CmdLatency
 	{
 		double startDelay;
@@ -228,18 +283,18 @@ namespace CrossbarTeraSLib {
 		COMPLETION_REQ_W_DATA
 	};
 
-	/*enum bankStatus
+	enum bankStatus
 	{
 		BANK_FREE = 0,
 		BANK_BUSY = 1
 	};
-	typedef bankStatus cwBankStatus;*/
+	typedef bankStatus cwBankStatus;
 
 	enum activeQueueType
 	{
-		SHORT = 0,
-		LONG = 1,
-		DMA = 2,
+		SHORT_QUEUE = 0,
+		LONG_QUEUE = 1,
+		DMA_QUEUE = 2,
 	};
 	typedef enum activeQueueType aQType;
 
