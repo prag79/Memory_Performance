@@ -16,9 +16,9 @@
  */
 trafficGenerator::trafficGenerator(uint64_t m, uint32_t c,
 		uint32_t imn, uint32_t imx, uint8_t r, uint8_t s,
-		uint8_t numDie, uint8_t numBanks, alignment a, uint64_t sd) : distLba(0, m + 1), distDir(0, 99),
+		uint8_t numDie, uint8_t numBanks, uint8_t chanNum, alignment a, uint64_t sd) : distLba(0, m + 1), distDir(0, 99),
 				maxLba(m), cwSize(c), ioMin(imn), ioMax(imx), rdPct(r),
-				seqPct(s), align(a), seed(sd), mNumDie(numDie), mNumBanks(numBanks)
+				seqPct(s), align(a), seed(sd), mNumDie(numDie), mNumBanks(numBanks), mChanNum(chanNum)
 {
 	
 	if (ioMin > ioMax) {
@@ -100,7 +100,8 @@ int trafficGenerator::writeCommandsToSameBanks(int numCmds)
 		cmdPayload.cwCnt = ioMax / cwSize;
 		if (seqPct == 100) {
 			cmdPayload.lba = nextLba;
-			nextLba += (ioMax / cwSize) * mNumDie * mNumBanks;
+			//nextLba += (ioMax / cwSize) * mNumDie * mNumBanks * mNumChan;
+			nextLba += mChanNum * mNumDie * mNumBanks;
 			if (nextLba >= maxLba) {
 				nextLba = 0;
 			}

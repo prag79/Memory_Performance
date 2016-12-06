@@ -298,6 +298,8 @@ private:
 	uint8_t mQueueCount;
 	uint8_t mByteIndex;
 	uint8_t mValidCount;
+
+	bool mEnableSameBankTest;
 };
 
 
@@ -343,19 +345,14 @@ TestBenchTop::TestBenchTop(sc_module_name nm, uint32_t ioSize, uint32_t blockSiz
 	, mNumCmdWrkld(0)
 	, mFirstCmdTime(sc_time(0, SC_NS))
 	, mWrkldIoSize(0)
-	, mTrafficGen(65536, cwSize, 512, ioSize, cmdPct, seqLBAPct, numDie, bankNum)
+	, mTrafficGen(65536, cwSize, 512, ioSize, cmdPct, seqLBAPct, numDie, bankNum, chanNum)
 	, mPollWaitTime(pollWaitTime)
 	, mCmdCount(0)
+	, mEnableSameBankTest(true)
 {
 	srand((unsigned int)time(NULL));
 
-	if (!enableWrkld)
-	{
-		mTrafficGen.openWriteModeFile();
-		mTrafficGen.writeCommands(mNumCmd);
-		mTrafficGen.closeWriteModeFile();
-		mCmdGenObj.generateCmdType(mNumCmd);
-	}
+	
 	if (mCwBankNum > 2) {
 		mBankMaskBits = (uint32_t)log2(double(mCwBankNum));
 	}
@@ -2270,17 +2267,7 @@ void TestBenchTop::checkData(const uint16_t& slotIndex, const uint16_t& rxCwCoun
 	//mDataGenObj.getData(expData, lba, (rxCwCount * mCwSize));
 
 	loadData(ddrAddress, rxData, (rxCwCount * mCwSize));
-
-
-	//	for (unsigned int i = 0; i < (rxCwCount * mCwSize); i++) {
-	//#if 1
-	//		//assert(rcvdData[i] == expData[i]);
-	//#else
-	//		std::cout << "Rx Data: " << hex << (uint32_t)rcvdData[i]
-	//			<< " Expected Data: " << hex << (uint32_t)expData[i] << endl;
-	//#endif
-	//	}
-	//
+		
 	delete[] expData;
 	delete[] rxData;
 }
@@ -2526,8 +2513,6 @@ void TestBenchTop::submissionQueueThread()
 }
 #endif
 
-
-
 void TestBenchTop::processCompletionQueue(bool& isSlotBusy)
 {
 	bool pollFlag1 = true;
@@ -2609,6 +2594,19 @@ void TestBenchTop::submissionQueueThread()
 	mTrafficGen.openReadModeFile();
     mFreeSpace = mQueueDepth;
 	mFirstCmdTime = sc_time_stamp();
+	
+		mTrafficGen.openWriteModeFile();
+		if (mEnableSameBankTest)
+		{
+			/*This method generates successive commands with LBA to
+			pointing to the same bank albeit different page*/
+			mTrafficGen.writeCommandsToSameBanks(mNumCmd);
+		}
+		else
+		{
+			mTrafficGen.writeCommands(mNumCmd);
+		}
+		mTrafficGen.closeWriteModeFile();
 	
 	for (uint32_t queueIndex = 0; queueIndex < mQueueDepth; queueIndex++)
 	{

@@ -61,6 +61,7 @@ private:
 	uint8_t cmdCnt;
 	uint8_t mNumDie;
 	uint8_t mNumBanks;
+	uint8_t mChanNum;
 	std::ofstream mCmdWrFile;
 	std::ifstream mCmdRdFile;
 public:
@@ -73,6 +74,7 @@ public:
 		uint8_t seqPct,		// % of generated command as sequential commands
 		uint8_t numDie,
 		uint8_t numBanks,
+		uint8_t chanNum,
 		alignment align = alignment::none,	// IO alignment. IO or None
 		uint64_t seed = 0	// Seed for random number generator for LBA
 			);

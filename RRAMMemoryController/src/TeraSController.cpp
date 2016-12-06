@@ -273,10 +273,17 @@ namespace  CrossbarTeraSLib {
 
 					cwBankIndex = getCwBankIndex(lba);
 					
-					/*Make DL1 status free again*/
-					mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
-					mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+					/*If DL2 is free, then data from DL1 can be moved to DL2 , making
+					DL1 free*/
+					if (mPhyDL2Status.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_FREE)
+					{
 
+						/*Make DL1 status free again*/
+						mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+						mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+						mPhyDL2Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY;
+						mTrigCmdDispEvent.at(chanNum)->notify(SC_ZERO_TIME);
+					}
 					lba |= ((uint64_t)chanNum & 0x0F);
 					msg.str("");
 					msg << "PENDING QUEUE PUSH:: READ COMMAND: "
@@ -1146,8 +1153,8 @@ namespace  CrossbarTeraSLib {
 				cwBankIndex = cwBankIndex + mCodeWordNum / 2;
 
 			//mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
-			/*Data Latch 1 status is set to free*/
-			mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+			/*Data Latch 2 status is set to free*/
+			mPhyDL2Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
 			mTrigCmdDispEvent.at(chanNum)->notify(SC_ZERO_TIME);
 			uint64_t pendingCmd;
 			createPendingCmdEntry(cmd, pendingCmd);

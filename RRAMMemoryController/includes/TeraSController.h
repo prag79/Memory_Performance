@@ -135,6 +135,8 @@ namespace CrossbarTeraSLib {
 		
 			initChannelSpecificParameters();
 
+			createReportFiles();
+
 			
 		}
 
