@@ -96,11 +96,12 @@ namespace  CrossbarTeraSLib {
 						processBankLinkList(cwBankIndex, cmd, timeVal, chanNum);
 						createActiveCmdEntry(cmd, queueHead.at(chanNum).at(cwBankIndex), queueVal);
 						
-						DispatchShortQueue(chanNum, queueVal, timeVal, cwBankIndex);
-
 						/*Make corresponding Bank and DL1 busy*/
 						mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY; //Make it busy
 						mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY;
+						DispatchShortQueue(chanNum, queueVal, timeVal, cwBankIndex);
+
+						
 						
 					}//if (mCwBankStatus.at(chanNum).at(cwBankIndex) == false)
 					else if (mPhyDL2Status.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_FREE && cmdType == cmdType::WRITE)
