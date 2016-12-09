@@ -165,9 +165,12 @@ namespace CrossbarTeraSLib {
 		void sendBackWriteACKMethod(int chanNum);
 		void sendBackReadACKMethod(int chanNum);
 		void memReadMethod(int chanNum);
-		void memAccessMethod(int chanNum);
+		void memAccessWriteMethod(int chanNum);
 		void memAccessReadMethod(int chanNum);
-		
+
+		/*Static method*/
+		void setPhyDL1StatusFreeMethod(int chanNum);
+
 		/** SC_METHOD sensitive to mDL2WriteEvent
 		* Checks the status of data latch2 before 
 		* writing to data latch
@@ -191,6 +194,7 @@ namespace CrossbarTeraSLib {
 		std::vector<sc_spawn_options* > mMemAccessProcOpt;
 		std::vector<sc_spawn_options* > mMemAccReadProcOpt;
 		std::vector<sc_spawn_options* > mPhyDL2WriteProcOpt;
+		std::vector<sc_spawn_options* > mPhyDL1FreeStatusProcOpt;
 
 		inline void readMemory(uint8_t& bankNum, uint32_t& pageNum, \
 			const uint8_t& numDie, const uint8_t& chanNum);
@@ -211,6 +215,12 @@ namespace CrossbarTeraSLib {
 		inline void copyDataFromEmulationCache(const uint8_t& cwBankIndex, \
 			const uint8_t& bankIndex, const uint8_t& numDie, const uint8_t& chanNum);
 
+		inline void copyDataFromPhyDataLatch2(const uint8_t& cwBankIndex, const uint8_t& bankIndex, \
+			const uint8_t& numDie, const uint8_t& chanNum);
+
+		inline void copyDataFromPhyDataLatch1(const uint8_t& bankIndex, \
+			uint8_t* dataPtr, const uint8_t& numDie, const uint8_t& chanNum);
+
 		string appendParameters(string name, string format);
 
 		/*Initialize parameters in the constructor*/
@@ -225,7 +235,12 @@ namespace CrossbarTeraSLib {
 		/*Vector of sc_event*/
 		std::vector<sc_event* > mEndRespRxEvent;
 		std::vector<sc_event* > mPhyDL2WriteEvent;
-		std::vector<sc_event* > mPhyDL1WriteEvent;
+		//std::vector<sc_event* > mPhyDL1WriteEvent;
+		std::vector<sc_event* > mPhyDL1FreeEvent;
+		std::vector<sc_event* > mTrigDL1FreeStatusMethodEvent;
+		/*Queue to push bankIndex value by SendWriteAccessAckMethod and pop by 
+		  memAccessWriteMethod*/
+		std::queue<uint8_t> mBankIndexQueue;
 
 		double mWriteCmdTransSpeed;
 		double mReadCmdTransSpeed;
