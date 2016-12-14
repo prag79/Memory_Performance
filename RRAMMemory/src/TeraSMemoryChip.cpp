@@ -792,27 +792,28 @@ namespace CrossbarTeraSLib {
 	{
 		while (1)
 		{
-			if (mBankIndexQueue.empty())
+			if (mBankIndexQueue.empty() && mNumDieQueue.empty())
 			{
 				wait(*(mPhyDL2WriteEvent.at(chanNum)));
 			}
-			uint8_t bankIndex = mBankIndexQueue.front();
-			mBankIndexQueue.pop();
+			else {
+				uint8_t bankIndex = mBankIndexQueue.front();
+				mBankIndexQueue.pop();
 
-			uint8_t numDie = mNumDieQueue.front();
-			mNumDieQueue.pop();
-			if ((mDataLatch2Status.at(chanNum) + (bankIndex + numDie* mBankNum))->getStatus() == cwBankStatus::BANK_BUSY)
-			{
-				wait(*(mPhyDL2FreeEvent.at(chanNum)));
-			}
+				uint8_t numDie = mNumDieQueue.front();
+				mNumDieQueue.pop();
+				if ((mDataLatch2Status.at(chanNum) + (bankIndex + numDie* mBankNum))->getStatus() == cwBankStatus::BANK_BUSY)
+				{
+					wait(*(mPhyDL2FreeEvent.at(chanNum)));
+				}
 
-			if ((mDataLatch2Status.at(chanNum) + (bankIndex + numDie* mBankNum))->getStatus() == cwBankStatus::BANK_FREE && (mDataLatch1Status.at(chanNum) + (bankIndex + numDie* mBankNum))->getStatus() == cwBankStatus::BANK_BUSY)
-			{
-				memcpy(mPhysicalDataLatch2.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, mPhysicalDataLatch1.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, mPageSize);
-				(mDataLatch2Status.at(chanNum) + (bankIndex + numDie* mBankNum))->setStatus(cwBankStatus::BANK_BUSY);
-				(mDataLatch1Status.at(chanNum) + (bankIndex + numDie* mBankNum))->setStatus(cwBankStatus::BANK_FREE);
+				if ((mDataLatch2Status.at(chanNum) + (bankIndex + numDie* mBankNum))->getStatus() == cwBankStatus::BANK_FREE && (mDataLatch1Status.at(chanNum) + (bankIndex + numDie* mBankNum))->getStatus() == cwBankStatus::BANK_BUSY)
+				{
+					memcpy(mPhysicalDataLatch2.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, mPhysicalDataLatch1.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, mPageSize);
+					(mDataLatch2Status.at(chanNum) + (bankIndex + numDie* mBankNum))->setStatus(cwBankStatus::BANK_BUSY);
+					(mDataLatch1Status.at(chanNum) + (bankIndex + numDie* mBankNum))->setStatus(cwBankStatus::BANK_FREE);
+				}
 			}
-			
 		}
 	}
 
