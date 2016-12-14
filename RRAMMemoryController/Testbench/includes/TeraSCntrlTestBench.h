@@ -43,6 +43,8 @@ public:
 				//throw "Bad Allocation";
 				std::cerr << msg << endl;
 			}
+
+			/*Calculate Number of slots based on cw count and queueSize*/
 			mNumSlot = (uint16_t)(mQueueSize / mCwCount);
 			if (mNumSlot > 256)
 			{

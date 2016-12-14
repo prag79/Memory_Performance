@@ -119,7 +119,7 @@
 			return mStatus;
 		}
 
-		void setStatus(cwBankStatus& val)
+		void setStatus(cwBankStatus val)
 		{
 			mStatus = val;
 		}

@@ -169,13 +169,14 @@ namespace CrossbarTeraSLib {
 		sc_time tScheduled = SC_ZERO_TIME;
 		uint8_t cwBankNum;
 		uint32_t pageNum;
-		
+		uint8_t codeWordCount = mCodeWordBankNum;
+
 		next_trigger(mEndReqQueue.at(chanNum)->get_event());
+		
 		while ((payloadPtr = mEndReqQueue.at(chanNum)->get_next_transaction()) != NULL) {
 
 			if (payloadPtr->is_write())
 			{
-
 				tScheduled = tScheduled + mProgramTime;
 
 				msg.str("");
@@ -193,10 +194,11 @@ namespace CrossbarTeraSLib {
 
 				uint64_t addr = 0x0;
 				addr = payloadPtr->get_address();
+
 				try {
 					uint8_t code;
 					decodeAddress(addr, cwBankNum, pageNum, code);
-					
+
 					uint8_t *dataPtr = payloadPtr->get_data_ptr();
 					moveDataToEmulation(dataPtr, chanNum);
 
@@ -205,11 +207,50 @@ namespace CrossbarTeraSLib {
 					/*Read chipSelect Port*/
 					if (!mWriteChipSelect.at(chanNum).empty()) {
 						chipSelect = mWriteChipSelect.at(chanNum).front();
-						mWriteChipSelect.at(chanNum).pop();
 					}
 
-					/*Write data from physical cache to memory file*/
-					writeMemory(cwBankNum, pageNum, chipSelect, chanNum);
+					if (codeWordCount == 0)
+					{
+						throw "Invalid CodeWordSize! ";
+					}
+
+
+					uint8_t bankIndex = cwBankNum;
+					uint8_t cwBankIndex = 0;
+					uint32_t pageIndex = pageNum;
+
+					while (codeWordCount)
+					{
+						/*Move data from emulation cache to DL2*/
+						copyDataFromEmulationCache(cwBankIndex, bankIndex, chipSelect, chanNum);
+						/*If DL1 is busy then wait it to be free, this event is notified in
+						memAccessWriteMethod*/
+						/*if ((mDataLatch1Status.at(chanNum) + (bankIndex + chipSelect * mBankNum))->getStatus() == cwBankStatus::BANK_FREE)
+						{*/
+						   mBankIndexQueue.push(bankIndex);
+						   mPageIndexQueue.push(pageIndex);
+
+						   bankIndex++;
+
+						   /*implement wrap around*/
+						   if (bankIndex >= mBankNum) {
+							   bankIndex = 0;
+							   pageIndex++;
+							   if (pageIndex >= mPageNum) {
+								   pageIndex = 0;
+								   bankIndex = 0;
+							   }
+						   }
+						   codeWordCount--;
+						   cwBankIndex++;
+
+						   
+
+					/*		
+						}
+						else continue;*/
+						
+					}//while()
 
 				}
 				catch (const char* msg)
@@ -222,30 +263,31 @@ namespace CrossbarTeraSLib {
 				mBegRespQueue.at(chanNum)->notify(*payloadPtr, tScheduled);
 				status = (*pOnfiBus.at(chanNum))->nb_transport_bw(*payloadPtr, phase, tScheduled);
 			}
-			
-				switch (status)
-				{
 
-				case tlm::TLM_ACCEPTED:
-				{
-										  // more phases will follow
-										  break;
-				}
-				case tlm::TLM_COMPLETED:
-				{
+			switch (status)
+			{
 
-										   break;
-				}
-				case tlm::TLM_UPDATED:
-				{
-										 break;
-				}
-				default:
-				{
-						  break;
-				}
-				}// end switch
-			} //end while
+			case tlm::TLM_ACCEPTED:
+			{
+									  // more phases will follow
+									  break;
+			}
+			case tlm::TLM_COMPLETED:
+			{
+
+									   break;
+			}
+			case tlm::TLM_UPDATED:
+			{
+									 break;
+			}
+			default:
+			{
+					   break;
+			}
+			}// end switch
+		} //end while
+		
 	}
 
 	/** SC_METHOD sensitive to peq event
@@ -366,7 +408,7 @@ namespace CrossbarTeraSLib {
 						bankNum = cwBankNum;
 					
 						copyDataToEmulationCache(cwBankNum, cwIndex, chipSelect, chanNum);
-						
+						mPhyDL2FreeEvent.at(chanNum)->notify(SC_ZERO_TIME);
 						/*Implement wrap around*/
 						bankNum++;
 						if (bankNum >= mBankNum * mNumDie)
@@ -491,17 +533,30 @@ namespace CrossbarTeraSLib {
 		}
 	}
 
+	void TeraSMemoryDevice::setPhyDL1StatusFreeMethod(int chanNum)
+	{
+		uint8_t bankIndex = mBankIndexQueue.front();
+		mBankIndexQueue.pop();
+
+		bool chipSelect = mWriteChipSelect.at(chanNum).front();
+		mWriteChipSelect.at(chanNum).pop();
+		(mDataLatch1Status.at(chanNum) + (bankIndex + chipSelect * mBankNum))->setStatus(cwBankStatus::BANK_FREE);
+		/*Notify that DL1 is free and data is moved from DL1 to memory file*/
+		(mPhyDL1FreeEvent.at(chanNum) + (bankIndex + chipSelect * mBankNum))->notify(SC_ZERO_TIME);
+
+	}
 	/** SC_METHOD sensitive to peq event
 	* When Memory WRITE;it writes the data to the memory
 	* @return void
 	**/
-	void TeraSMemoryDevice::memAccessMethod(int chanNum)
+	void TeraSMemoryDevice::memAccessWriteMethod(int chanNum)
 	{
 		tlm::tlm_generic_payload *payloadPtr;// = new tlm::tlm_generic_payload;
 		sc_time tScheduled;
 		std::ostringstream msg;
 		uint64_t addr = 0x0;
 		tlm::tlm_sync_enum status;
+		uint8_t codeWordCount = mCodeWordBankNum;
 
 			next_trigger(mBegRespQueue.at(chanNum)->get_event());
 			while ((payloadPtr = mBegRespQueue.at(chanNum)->get_next_transaction()) != NULL) {
@@ -525,7 +580,32 @@ namespace CrossbarTeraSLib {
 					tScheduled = SC_ZERO_TIME;
 
 					tlm::tlm_phase phase = tlm::BEGIN_RESP;
-					
+
+					addr = payloadPtr->get_address();
+
+					uint8_t cwBankIndex = 0;
+					bool chipSelect = mWriteChipSelect.at(chanNum).front();
+					mWriteChipSelect.at(chanNum).pop();
+					while (codeWordCount)
+					{
+						uint8_t bankIndex = mBankIndexQueue.front();
+						mBankIndexQueue.pop();
+
+						uint8_t pageIndex = mPageIndexQueue.front();
+						mPageIndexQueue.pop();
+
+						/*Move data from DL2 to DL1*/
+						copyDataFromPhyDataLatch2(cwBankIndex, bankIndex, chipSelect, chanNum);
+
+						/*Log the transaction*/
+						mTransactionCount.at(chanNum).at(bankIndex + chipSelect * mBankNum)++;
+
+						/*write data to the memory file*/
+						mCacheMemory->writeMemory(bankIndex, pageIndex, mPhysicalDataLatch1.at(chanNum) + (bankIndex + chipSelect * mBankNum), chipSelect, chanNum);
+						//(mTrigDL1FreeStatusMethodEvent.at(chanNum) + (bankIndex + chipSelect * mBankNum))->notify(mProgramTime);
+						codeWordCount--;
+						cwBankIndex++;
+					}
 
 					status = (*pOnfiBus.at(chanNum))->nb_transport_bw(*payloadPtr, phase, tScheduled);
 				
@@ -655,8 +735,11 @@ namespace CrossbarTeraSLib {
 			/*Read Data from the file*/
 			mCacheMemory->readMemory(bankIndex, pageIndex, dataPtr, numDie, chanNum);
 
-			
+			/*Copy data from memory file to DL1*/
 			copyDataToDataLatch1(dataPtr, bankIndex, numDie, chanNum);
+			mBankIndexQueue.push(bankIndex);
+			mNumDieQueue.push(numDie);
+			mPhyDL2WriteEvent.at(chanNum)->notify(SC_ZERO_TIME);
 
 			/*log the transaction for house keeping*/
 			mTransactionCount.at(chanNum).at(bankIndex + numDie * mBankNum)++;
@@ -693,11 +776,43 @@ namespace CrossbarTeraSLib {
 		{
 			throw "Invalid PageSize !";
 		}
+
+		/*Copies the data from the memory page to DL1 and notifies phyDl2WriteMethod method */
 		if ((mDataLatch1Status.at(chanNum) + (bankIndex + numDie* mBankNum))->getStatus()  == cwBankStatus::BANK_FREE)
 		{
-			//memcpy(mPhysicalDataCache.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, dataPtr, mPageSize);
 			memcpy(mPhysicalDataLatch1.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, dataPtr, mPageSize);
-			mPhyDL2WriteEvent.at(bankIndex + numDie * mBankNum + mNumDie * mBankNum * chanNum)->notify(SC_ZERO_TIME);
+			
+			(mDataLatch1Status.at(chanNum) + (bankIndex + numDie* mBankNum))->setStatus(cwBankStatus::BANK_BUSY);
+			
+		}
+		
+	}
+
+	void TeraSMemoryDevice::phyDl2WriteThread(uint32_t chanNum)
+	{
+		while (1)
+		{
+			if (mBankIndexQueue.empty())
+			{
+				wait(*(mPhyDL2WriteEvent.at(chanNum)));
+			}
+			uint8_t bankIndex = mBankIndexQueue.front();
+			mBankIndexQueue.pop();
+
+			uint8_t numDie = mNumDieQueue.front();
+			mNumDieQueue.pop();
+			if ((mDataLatch2Status.at(chanNum) + (bankIndex + numDie* mBankNum))->getStatus() == cwBankStatus::BANK_BUSY)
+			{
+				wait(*(mPhyDL2FreeEvent.at(chanNum)));
+			}
+
+			if ((mDataLatch2Status.at(chanNum) + (bankIndex + numDie* mBankNum))->getStatus() == cwBankStatus::BANK_FREE && (mDataLatch1Status.at(chanNum) + (bankIndex + numDie* mBankNum))->getStatus() == cwBankStatus::BANK_BUSY)
+			{
+				memcpy(mPhysicalDataLatch2.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, mPhysicalDataLatch1.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, mPageSize);
+				(mDataLatch2Status.at(chanNum) + (bankIndex + numDie* mBankNum))->setStatus(cwBankStatus::BANK_BUSY);
+				(mDataLatch1Status.at(chanNum) + (bankIndex + numDie* mBankNum))->setStatus(cwBankStatus::BANK_FREE);
+			}
+			
 		}
 	}
 
@@ -718,11 +833,10 @@ namespace CrossbarTeraSLib {
 		if ((mDataLatch2Status.at(chanNum) + (bankIndex + numDie * mBankNum))->getStatus() == cwBankStatus::BANK_BUSY)
 		{
 			memcpy(mEmulationDataCache.at(chanNum) + cwBankIndex * mPageSize, mPhysicalDataLatch2.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, mPageSize);
-			cwBankStatus val = cwBankStatus::BANK_FREE;
-			(mDataLatch2Status.at(chanNum) + (bankIndex + numDie * mBankNum))->setStatus(val);
+			(mDataLatch2Status.at(chanNum) + (bankIndex + numDie * mBankNum))->setStatus(cwBankStatus::BANK_FREE);
 		}
-		else
-			next_trigger(*mPhyDL2WriteEvent.at(bankIndex + numDie * mBankNum + mNumDie * mBankNum * chanNum));
+		/*else
+			next_trigger(*mPhyDL2WriteEvent.at(bankIndex + numDie * mBankNum + mNumDie * mBankNum * chanNum));*/
 	}
 
 	/** writeMemory
@@ -750,9 +864,14 @@ namespace CrossbarTeraSLib {
 		}
 		while (codeWordCount)
 		{
+			/*Move data from emulation cache to DL2*/
 			copyDataFromEmulationCache(cwBankIndex, bankIndex, numDie, chanNum);
 
-			copyDataFromPhysicalCache(bankIndex, dataPtr, numDie, chanNum);
+			/*Move data from DL2 to DL1*/
+			copyDataFromPhyDataLatch2(cwBankIndex, bankIndex, numDie, chanNum);
+
+			/*Move */
+			copyDataFromPhyDataLatch1(bankIndex, dataPtr, numDie, chanNum);
 
 			/*Log the transaction*/
 			mTransactionCount.at(chanNum).at(bankIndex + numDie * mBankNum)++;
@@ -784,14 +903,18 @@ namespace CrossbarTeraSLib {
 	* @param uint8_t* dataPtr data buffer
 	* @return void
 	**/
-	void TeraSMemoryDevice::copyDataFromPhysicalCache(const uint8_t& bankIndex, \
+	void TeraSMemoryDevice::copyDataFromPhyDataLatch1(const uint8_t& bankIndex, \
 		uint8_t* dataPtr, const uint8_t& numDie, const uint8_t& chanNum)
 	{
 		if (mPageSize == 0)
 		{
 			throw "Invalid PageSize !";
 		}
-		memcpy(dataPtr, mPhysicalDataCache.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, mPageSize);
+		if ((mDataLatch1Status.at(chanNum) + (bankIndex + numDie * mBankNum))->getStatus() == cwBankStatus::BANK_BUSY)
+		{
+			memcpy(dataPtr, mPhysicalDataLatch1.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, mPageSize);
+			(mDataLatch1Status.at(chanNum) + (bankIndex + numDie * mBankNum))->setStatus(cwBankStatus::BANK_FREE);
+		}
 	}
 
 	/** Copies data from Emulation Cache to Physical Cache
@@ -807,10 +930,36 @@ namespace CrossbarTeraSLib {
 		{
 			throw "Invalid PageSize !";
 		}
-		memcpy(mPhysicalDataCache.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, \
-			mEmulationDataCache.at(chanNum) + cwBankIndex * mPageSize, mPageSize);
+
+		/*If DL2 is free then copy data from emulation cache to the DL2 else
+		 The guard statement is not needed as the controller is tracking the DL status and it would not send
+		 any command if DL2 is not free in the first place*/
+		if ((mDataLatch2Status.at(chanNum) + (bankIndex + numDie * mBankNum))->getStatus() == cwBankStatus::BANK_FREE)
+		{
+			memcpy(mPhysicalDataLatch2.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, \
+				mEmulationDataCache.at(chanNum) + cwBankIndex * mPageSize, mPageSize);
+			
+			(mDataLatch2Status.at(chanNum) + (bankIndex + numDie * mBankNum))->setStatus(cwBankStatus::BANK_BUSY);
+		}
+		
 	}
 
+	/** Copies data from Physical Data Latch2 to Physical Data Latch1
+	* It is called during memory write
+	* @param uint8_t cwBankIndex CW Bank Number
+	* @param uint8_t bankIndex bank Number
+	* @return void
+	**/
+	void TeraSMemoryDevice::copyDataFromPhyDataLatch2(const uint8_t& cwBankIndex, const uint8_t& bankIndex, \
+		const uint8_t& numDie, const uint8_t& chanNum)
+	{
+		
+			memcpy(mPhysicalDataLatch1.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, \
+				mPhysicalDataLatch2.at(chanNum) + (bankIndex + numDie * mBankNum) * mPageSize, mPageSize);
+			(mDataLatch1Status.at(chanNum) + (bankIndex + numDie * mBankNum))->setStatus(cwBankStatus::BANK_BUSY);
+			(mDataLatch2Status.at(chanNum) + (bankIndex + numDie * mBankNum))->setStatus(cwBankStatus::BANK_FREE);
+		
+	}
 	 
 	/** moves data from emulation cache to data pointer payload
 	* Data is moved from the emulation cache to a data pointer payload
@@ -929,33 +1078,24 @@ namespace CrossbarTeraSLib {
 		delete mChannelReportCsv;
 	}
 
-	void TeraSMemoryDevice::phyDl2WriteMethod(uint32_t dl2Index)
-	{
-		if (mDataLatch2Status.at(dl2Index)->getStatus() == cwBankStatus::BANK_FREE && mDataLatch1Status.at(dl2Index)->getStatus() == cwBankStatus::BANK_BUSY)
-		{
-			memcpy(mPhysicalDataLatch2.at(dl2Index), mPhysicalDataLatch1.at(dl2Index), mPageSize);
-			cwBankStatus val1 = cwBankStatus::BANK_BUSY;
-			cwBankStatus val2 = cwBankStatus::BANK_FREE;
-			mDataLatch2Status.at(dl2Index)->setStatus(val1);
-			mDataLatch1Status.at(dl2Index)->setStatus(val2);
-		}
-		else
-			next_trigger(*mPhyDL2WriteEvent.at(dl2Index));
-	}
-
+	
 	void TeraSMemoryDevice::initPhyDLParameters()
 	{
 		/*Data Latch2 related data structure initialization*/
 		for (uint32_t dl2Index = 0; dl2Index < (mNumDie * mBankNum * mChanNum); dl2Index++)
 		{
-			mPhyDL2WriteEvent.push_back(new sc_event(sc_gen_unique_name("mDL2WriteEvent")));
+			
+			
+			mTrigDL1FreeStatusMethodEvent.push_back(new sc_event(sc_gen_unique_name("mPhyDL1FreeEvent")));
 
-			mPhyDL2WriteProcOpt.push_back(new sc_spawn_options());
-			mPhyDL2WriteProcOpt.at(dl2Index)->spawn_method();
-			mPhyDL2WriteProcOpt.at(dl2Index)->set_sensitivity(mPhyDL2WriteEvent.at(dl2Index));
-			mPhyDL2WriteProcOpt.at(dl2Index)->dont_initialize();
-			sc_spawn(sc_bind(&TeraSMemoryDevice::phyDl2WriteMethod, \
-				this, dl2Index), sc_gen_unique_name("phyDl2WriteMethod"), mPhyDL2WriteProcOpt.at(dl2Index));
+			
+
+			mPhyDL1FreeStatusProcOpt.push_back(new sc_spawn_options());
+			mPhyDL1FreeStatusProcOpt.at(dl2Index)->set_sensitivity(mTrigDL1FreeStatusMethodEvent.at(dl2Index));
+			mPhyDL1FreeStatusProcOpt.at(dl2Index)->spawn_method();
+			mPhyDL1FreeStatusProcOpt.at(dl2Index)->dont_initialize();
+			sc_spawn(sc_bind(&TeraSMemoryDevice::setPhyDL1StatusFreeMethod, \
+				this, dl2Index), sc_gen_unique_name("setPhyDL1StatusFreeMethod"), mPhyDL1FreeStatusProcOpt.at(dl2Index));
 		}
 	}
 
@@ -1023,12 +1163,23 @@ namespace CrossbarTeraSLib {
 
 	void TeraSMemoryDevice::initDynamicProcess(uint8_t chanIndex)
 	{
+		mPhyDL2WriteEvent.push_back(new sc_event(sc_gen_unique_name("mDL2WriteEvent")));
+		mPhyDL1FreeEvent.push_back(new sc_event(sc_gen_unique_name("mPhyDL1FreeEvent")));
+		mPhyDL2FreeEvent.push_back(new sc_event(sc_gen_unique_name("mPhyDL2FreeEvent")));
+
+		mPhyDL2WriteProcOpt.push_back(new sc_spawn_options());
+		//mPhyDL2WriteProcOpt.at(chanIndex)->spawn_method();
+		mPhyDL2WriteProcOpt.at(chanIndex)->set_sensitivity(mPhyDL2WriteEvent.at(chanIndex));
+		mPhyDL2WriteProcOpt.at(chanIndex)->dont_initialize();
+		sc_spawn(sc_bind(&TeraSMemoryDevice::phyDl2WriteThread, \
+			this, chanIndex), sc_gen_unique_name("phyDl2WriteThread"), mPhyDL2WriteProcOpt.at(chanIndex));
+
 		mSendBackAckProcOpt.push_back(new sc_spawn_options());
 		mSendBackAckProcOpt.at(chanIndex)->spawn_method();
 		mSendBackAckProcOpt.at(chanIndex)->set_sensitivity(&mEndReqQueue.at(chanIndex)->get_event());
 		mSendBackAckProcOpt.at(chanIndex)->dont_initialize();
 		sc_spawn(sc_bind(&TeraSMemoryDevice::sendBackWriteACKMethod, \
-			this, chanIndex), sc_gen_unique_name("sendBackACKMethod"), mSendBackAckProcOpt.at(chanIndex));
+			this, chanIndex), sc_gen_unique_name("sendBackWriteACKMethod"), mSendBackAckProcOpt.at(chanIndex));
 
 		mSendBackReadAckProcOpt.push_back(new sc_spawn_options());
 		mSendBackReadAckProcOpt.at(chanIndex)->spawn_method();
@@ -1048,8 +1199,8 @@ namespace CrossbarTeraSLib {
 		mMemAccessProcOpt.at(chanIndex)->set_sensitivity(&mBegRespQueue.at(chanIndex)->get_event());
 		mMemAccessProcOpt.at(chanIndex)->spawn_method();
 		mMemAccessProcOpt.at(chanIndex)->dont_initialize();
-		sc_spawn(sc_bind(&TeraSMemoryDevice::memAccessMethod, \
-			this, chanIndex), sc_gen_unique_name("memAccessMethod"), mMemAccessProcOpt.at(chanIndex));
+		sc_spawn(sc_bind(&TeraSMemoryDevice::memAccessWriteMethod, \
+			this, chanIndex), sc_gen_unique_name("memAccessWriteMethod"), mMemAccessProcOpt.at(chanIndex));
 
 		mMemAccReadProcOpt.push_back(new sc_spawn_options());
 		mMemAccReadProcOpt.at(chanIndex)->set_sensitivity(&mBegRespReadQueue.at(chanIndex)->get_event());
@@ -1057,6 +1208,8 @@ namespace CrossbarTeraSLib {
 		mMemAccReadProcOpt.at(chanIndex)->dont_initialize();
 		sc_spawn(sc_bind(&TeraSMemoryDevice::memAccessReadMethod, \
 			this, chanIndex), sc_gen_unique_name("memAccessReadMethod"), mMemAccReadProcOpt.at(chanIndex));
+
+		
 	}
 
 	void TeraSMemoryDevice::createReportFiles()

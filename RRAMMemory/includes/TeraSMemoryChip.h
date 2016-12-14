@@ -179,7 +179,7 @@ namespace CrossbarTeraSLib {
 		* @return void
 		**/
 		
-		void phyDl2WriteMethod(uint32_t dl2Index);
+		void phyDl2WriteThread(uint32_t chanNum);
 
 		std::vector<tlm_utils::peq_with_get<tlm::tlm_generic_payload>* >  mBegRespQueue;
 		std::vector<tlm_utils::peq_with_get<tlm::tlm_generic_payload>* >  mBegRespReadQueue;
@@ -237,10 +237,13 @@ namespace CrossbarTeraSLib {
 		std::vector<sc_event* > mPhyDL2WriteEvent;
 		//std::vector<sc_event* > mPhyDL1WriteEvent;
 		std::vector<sc_event* > mPhyDL1FreeEvent;
+		std::vector<sc_event* > mPhyDL2FreeEvent;
 		std::vector<sc_event* > mTrigDL1FreeStatusMethodEvent;
 		/*Queue to push bankIndex value by SendWriteAccessAckMethod and pop by 
 		  memAccessWriteMethod*/
 		std::queue<uint8_t> mBankIndexQueue;
+		std::queue<uint8_t> mPageIndexQueue;
+		std::queue<uint8_t> mNumDieQueue;
 
 		double mWriteCmdTransSpeed;
 		double mReadCmdTransSpeed;

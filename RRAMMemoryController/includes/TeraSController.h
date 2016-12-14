@@ -247,6 +247,7 @@ namespace CrossbarTeraSLib {
 		std::vector<sc_event* > mAlcqNotFullEvent;
 		std::vector<sc_event* > mAscqNotFullEvent;
 		std::vector<sc_event* > mAlcqNotEmptyEvent;
+		std::vector<sc_event* > mPhyDL1FreeEvent;
 		std::vector<sc_event_queue* > mAlcqEmptyEvent;
 
 		std::vector<sc_event* > mAscqNotEmptyEvent;
@@ -381,7 +382,10 @@ namespace CrossbarTeraSLib {
 		uint64_t getActiveLBAMask();
 		uint64_t getPendingLBAMask();
 		cmdType  getPhysicalCmdType(const uint64_t& cmd);
-		uint16_t getCwBankIndex(const uint16_t& lba);
+		uint16_t getPendingCwBankIndex(const uint64_t& lba);
+		uint16_t getActiveCwBankIndex(const uint64_t& lba);
+		bool     getPendingChipSelect(const uint64_t&lba);
+		bool     getActiveChipSelect(const uint64_t& lba);
 		void     end_of_simulation();
 		uint32_t mBankMask;
 		uint64_t mPageMask;

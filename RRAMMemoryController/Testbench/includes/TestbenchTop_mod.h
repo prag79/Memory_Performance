@@ -348,7 +348,7 @@ TestBenchTop::TestBenchTop(sc_module_name nm, uint32_t ioSize, uint32_t blockSiz
 	, mTrafficGen(65536, cwSize, 512, ioSize, cmdPct, seqLBAPct, numDie, bankNum, chanNum)
 	, mPollWaitTime(pollWaitTime)
 	, mCmdCount(0)
-	, mEnableSameBankTest(true)
+	, mEnableSameBankTest(false)
 {
 	srand((unsigned int)time(NULL));
 
@@ -1365,7 +1365,7 @@ void TestBenchTop::sendWrkldCmdsQD( uint64_t& cmdIndex)
 
 				/* Increment Command Count*/
 				cmdIndex++;
-				lbaSkipGap = payload.cwCnt;
+				lbaSkipGap = (uint8_t)payload.cwCnt;
 				payload.lba += lbaSkipGap;
 				slotReqIndex++;
 			}//if (mSlotManagerObj.getAvailableSlot(numSlot))
@@ -1490,7 +1490,7 @@ void TestBenchTop::mcore_threadFromWorkLoad(int cpuNum, int numCmdPerThread, uin
 	uint8_t remSlot;
 	uint32_t tempCwCnt;
 	uint32_t lastCwCnt;
-	uint16_t numSlot = 0;
+	uint16_t numSlot = cpuNum;
 	numCmdPerThread += residualCmd;
 
 	mWrkLoad.openReadModeFile();

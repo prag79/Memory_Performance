@@ -60,7 +60,7 @@ class CommandGenerator{
 
 	  uint64_t getFixChannelLBA(const uint32_t& cmdIndex);
 
-	  uint16_t getBankAddress(uint32_t cmdNum);
+	  uint8_t getBankAddress(uint32_t cmdNum);
  
 	  uint32_t getPageAddress(uint32_t cmdNum);
 
@@ -228,14 +228,14 @@ testCmdType CommandGenerator::getCmdType(const uint64_t& cmdIndex){
 * @param cmdNum number of cmds
 * @return uint8_t
 **/
-uint16_t CommandGenerator::getBankAddress(uint32_t cmdNum)
+uint8_t CommandGenerator::getBankAddress(uint32_t cmdNum)
 {
 	if (mCwSize < (mBankNum * mPageSize)){
 
 		if (mCwSize == 0)
 			throw std::overflow_error("Divide by zero exception");
 
-		return (uint16_t)(cmdNum % ((mBankNum * mPageSize) / mCwSize));
+		return (uint8_t)(cmdNum % ((mBankNum * mPageSize) / mCwSize));
 	}
 	else{
 		return 0;

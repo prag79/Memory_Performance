@@ -73,7 +73,6 @@ namespace  CrossbarTeraSLib {
 			commands left in the HEAD of the linked list to be processed, go into wait state*/
 			pollCmdDispatcherBankStatus(chanNum);
 			
-
 			for (uint16_t cwBankIndex = 0; cwBankIndex < mCodeWordNum; cwBankIndex++)
 			{
 				mBankLinkList.getTail(chanNum, cwBankIndex, queueTail.at(chanNum).at(cwBankIndex));
@@ -99,9 +98,9 @@ namespace  CrossbarTeraSLib {
 						/*Make corresponding Bank and DL1 busy*/
 						mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY; //Make it busy
 						mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY;
-						DispatchShortQueue(chanNum, queueVal, timeVal, cwBankIndex);
 
-						
+						/*Dispatch READ Command into the short queue*/
+						DispatchShortQueue(chanNum, queueVal, timeVal, cwBankIndex);
 						
 					}//if (mCwBankStatus.at(chanNum).at(cwBankIndex) == false)
 					else if (mPhyDL2Status.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_FREE && cmdType == cmdType::WRITE)
@@ -109,11 +108,18 @@ namespace  CrossbarTeraSLib {
 						/*Update Head and Tail*/
 						processBankLinkList(cwBankIndex, cmd, timeVal, chanNum);
 						createActiveCmdEntry(cmd, queueHead.at(chanNum).at(cwBankIndex), queueVal);
-						DispatchLongQueue(chanNum, queueVal, timeVal, cwBankIndex);
 
 						/*Make corresponding Bank and DL2 busy*/
 						mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY;
 						mPhyDL2Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY;
+
+						/*Dispatch the WRITE Command into the Long Queue*/
+						DispatchLongQueue(chanNum, queueVal, timeVal, cwBankIndex);
+
+						
+					}
+					else{
+						wait(*mTrigCmdDispEvent.at(chanNum) | *mCmdDispatchEvent.at(chanNum));
 					}
 					/*else
 					{
@@ -172,9 +178,12 @@ namespace  CrossbarTeraSLib {
 				if (chipSelect && (mNumDie > 1))
 					cwBankIndex = cwBankIndex + (mCodeWordNum / mNumDie);
 
-
+				/*Set Physical Data Latch 1 Free*/
 				mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
-				mTrigCmdDispEvent.at(chanNum)->notify(SC_ZERO_TIME);
+				mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+
+				mPhyDL1FreeEvent.at(chanNum)->notify(SC_ZERO_TIME);
+				
 				uint16_t cnt = mIntermediateQueue.update(cmd, mPendingLBAMaskBits);
 
 				msg.str("");
@@ -194,6 +203,7 @@ namespace  CrossbarTeraSLib {
 					<< " Slot Number= " << dec << (uint32_t)slotNum
 					<< " Command Payload= 0x" << hex << (uint32_t)cmd
 					<< endl;
+
 				if (!cnt)
 				{
 					cmdType cmd = mSlotTable.at(slotNum).cmd;
@@ -272,8 +282,16 @@ namespace  CrossbarTeraSLib {
 
 					uint16_t cwBankIndex;
 
-					cwBankIndex = getCwBankIndex(lba);
+					cwBankIndex = getPendingCwBankIndex(lba);
 					
+					bool chipSelect = getPendingChipSelect(lba);
+
+					/*In case 2nd die is selected then cwBankIndex corresponds to the
+					second die. This is used t select appropriate bank to update the
+					status*/
+					if (chipSelect && (mNumDie > 1))
+						cwBankIndex = cwBankIndex + mCodeWordNum / 2;
+
 					/*If DL2 is free, then data from DL1 can be moved to DL2 , making
 					DL1 free*/
 					if (mPhyDL2Status.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_FREE)
@@ -314,8 +332,7 @@ namespace  CrossbarTeraSLib {
 		}//while
 
 	}
-
-
+	
 	/** completionMethod
 	* This method is notified when running count
 	* for a particular slot goes down to zero
@@ -396,7 +413,6 @@ namespace  CrossbarTeraSLib {
 				mEndReadEvent.at(chanNum)->notify(SC_ZERO_TIME);
 			}
 			else if (payloadPtr->is_read()){
-
 
 				mAvailableCredit.at(chanNum)++;
 				mCreditPositiveEvent.at(chanNum)->notify(SC_ZERO_TIME);
@@ -806,6 +822,8 @@ namespace  CrossbarTeraSLib {
 			<< endl;
 
 		mAlcq.at(chanNum).pushQueue(value);
+
+		/*Notify Long Queue has command*/
 		mAlcqNotEmptyEvent.at(chanNum)->notify(SC_ZERO_TIME);
 		
 	}
@@ -1065,8 +1083,7 @@ namespace  CrossbarTeraSLib {
 
 		cmd = queueData.cmd;
 		decodeActiveCommand(cmd, slotNum, ctype, lba, queueNum, cwCnt);
-
-
+		
 		sc_core::sc_time delay = queueData.time;
 		msg.str("");
 		msg << "LONG COMMAND: "
@@ -1099,9 +1116,40 @@ namespace  CrossbarTeraSLib {
 				<< endl;
 
 			sc_time currentTime = sc_time_stamp();
+
+			/*Send WRITE Command to the RRAM Interface (ONFI Channel)*/
 			RRAMInterfaceMethod(cmd, chanNum, mWriteData.at(chanNum), delay, ONFI_WRITE_COMMAND);
+
+			uint16_t cwBankIndex = getActiveCwBankIndex(lba);
+			bool chipSelect = getActiveChipSelect(lba);
+
+			/*In case 2nd die is selected then cwBankIndex corresponds to the
+			second die. This is used t select appropriate bank to update the
+			status*/
+			if (chipSelect && (mNumDie > 1))
+				cwBankIndex = cwBankIndex + mCodeWordNum / 2;
+
+			while (mPhyDL1Status.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_BUSY)
+			{
+				wait(*mPhyDL1FreeEvent.at(chanNum));
+			}
+			if (mPhyDL1Status.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_FREE)
+			{
+
+				/*Set Physical Data Latch2 FREE as DL1 is empty */
+				mPhyDL2Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+				mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+				/*Set Physical Data Latch 1 BUSY as data is sent to DL1 from DL2 immediately 
+				after that*/
+				mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY;
+				mTrigCmdDispEvent.at(chanNum)->notify(SC_ZERO_TIME);
+			}
+			/*Notify Command Dispatcher to send more WRITE Commands from LL
+			  to Long Queue*/
 			uint64_t pendingCmd;
 			currentTime = sc_time_stamp();
+
+			/*Push the WRITE command into the pending queue*/
 			createPendingCmdEntry(cmd, pendingCmd);
 			mPendingCmdQueue.at(chanNum)->notify(pendingCmd, mProgramTime);
 			currentTime = sc_time_stamp();
@@ -1123,6 +1171,8 @@ namespace  CrossbarTeraSLib {
 
 			sc_core::sc_time mCurrTime = sc_time_stamp();
 			delay = sc_time(0, SC_NS);
+
+			/*Send READ Command to the RRAM Interface (ONFI Channel)*/
 			RRAMInterfaceMethod(cmd, chanNum, mReadData.at(chanNum), delay, ONFI_BANK_SELECT_COMMAND);
 
 			mOnfiChanTime.at(chanNum) = (double)((double)(mCodeWordSize * 1000) / mOnfiSpeed);
@@ -1134,13 +1184,17 @@ namespace  CrossbarTeraSLib {
 			uint16_t cwBankIndex;
 			uint32_t page;
 			bool chipSelect;
+
 			decodeLBA(cmd, cwBankIndex, chipSelect, page);
+
 			if ((cwBankIndex == 1) && (mCwBankMaskBits == 1) && (mBankNum <= (mCodeWordSize / mPageSize)))
 			{
 				cwBankIndex = 0;
 				chipSelect = 1;
 			}
 			mDataBuffer_1.writeCWData(addr, mReadData.at(chanNum));
+
+			/*Implement Wrap around in case number of die is 1*/
 			if ((chipSelect == 1) && (mNumDie == 1))
 			{
 				chipSelect = 0;
@@ -1150,13 +1204,19 @@ namespace  CrossbarTeraSLib {
 					page = 0;
 				}
 			}
+			/*In case 2nd die is selected then cwBankIndex corresponds to the 
+			second die*/
 			if (chipSelect && (mNumDie > 1))
 				cwBankIndex = cwBankIndex + mCodeWordNum / 2;
 
 			//mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
 			/*Data Latch 2 status is set to free*/
 			mPhyDL2Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+
+			/*Notify CMD Dispatcher to send more READ Command into the Short Queue*/
 			mTrigCmdDispEvent.at(chanNum)->notify(SC_ZERO_TIME);
+
+			/*Push the READ Command into the intermediate Queue*/
 			uint64_t pendingCmd;
 			createPendingCmdEntry(cmd, pendingCmd);
 			uint16_t cnt = mIntermediateQueue.update(pendingCmd, mPendingLBAMaskBits);
@@ -1170,12 +1230,22 @@ namespace  CrossbarTeraSLib {
 		}
 	}
 
+	bool TeraSController::getPendingChipSelect(const uint64_t& lba)
+	{
+		return (bool)((lba >> (mCwBankMaskBits) & 0x1));
+	}
+
+	bool TeraSController::getActiveChipSelect(const uint64_t& lba)
+	{
+		return (bool)((lba >> (mCwBankMaskBits) & 0x1));
+	}
 	void TeraSController::setCmdTransferTime(const uint8_t& code, sc_core::sc_time& tDelay, sc_core::sc_time& delay, uint8_t chanNum)
 	{
 		sc_time currTime;
 		double writeCmdDataTransSpeed = (double)(mCmdTransferTime + (double)((mCodeWordSize)* 1000) / mOnfiSpeed); //NS
 		//double writeCmdTransSpeed = (double)((double)((ONFI_COMMAND_LENGTH) * 1000) / mOnfiSpeed);
 		double readBankCmdTransSpeed = (double)((double)(ONFI_BANK_SELECT_CMD_LENGTH * 1000 * 2) / mOnfiSpeed); //NS
+
 		if (code == ONFI_WRITE_COMMAND)
 		{
 			tDelay = sc_time(writeCmdDataTransSpeed, SC_NS) + delay;
@@ -1226,8 +1296,7 @@ namespace  CrossbarTeraSLib {
 		cmdType ctype;
 		tlm::tlm_generic_payload *payloadPtr;
 		sc_time tDelay = SC_ZERO_TIME;
-
-
+		
 		decodeCommand(cmd, ctype, cwBank, chipSelect, page);
 
 		payloadPtr = mTransMgr.allocate();
@@ -1361,11 +1430,12 @@ namespace  CrossbarTeraSLib {
 			}
 
 		}
-
+		return SHORT_QUEUE;
 	}
 #pragma endregion
 	
 #pragma region INTERFACE_METHOD
+
 /** b_transport
 * blocking interface
 * @param tlm_generic payload transaction payload
@@ -1380,8 +1450,7 @@ namespace  CrossbarTeraSLib {
 	   
 		QueueType mQueueType;
 		uint16_t slotNum;
-		uint64_t lba;
-		//cmdType type = READ;
+		
 		std::ostringstream msg;
 		decodeAddress(addr, mQueueType, slotNum);
 		mDelay = delay;
@@ -1762,9 +1831,15 @@ namespace  CrossbarTeraSLib {
 		page = (uint32_t) ((cmd >> (mCwBankMaskBits + 10)) & getActivePageMask());
 	}
 
-	uint16_t TeraSController::getCwBankIndex(const uint16_t& lba)
+	uint16_t TeraSController::getPendingCwBankIndex(const uint64_t& lba)
 	{
-		uint16_t cwBank = (uint16_t)((lba >> 9) & getCwBankMask());
+		uint16_t cwBank = (uint16_t)((lba) & getCwBankMask());
+		return cwBank;
+	}
+
+	uint16_t TeraSController::getActiveCwBankIndex(const uint64_t& lba)
+	{
+		uint16_t cwBank = (uint16_t)((lba) & getCwBankMask());
 		return cwBank;
 	}
 #pragma endregion
@@ -1784,8 +1859,6 @@ namespace  CrossbarTeraSLib {
 	{
 		for (uint8_t chanIndex = 0; chanIndex < mChanNum; chanIndex++)
 		{
-
-
 			mOnfiChanTime.push_back(0);
 			mOnfiTotalTime.push_back(0);
 
@@ -1804,8 +1877,7 @@ namespace  CrossbarTeraSLib {
 
 			pOnfiBus.push_back(new tlm_utils::simple_initiator_socket_tagged<TeraSController, ONFI_BUS_WIDTH, tlm::tlm_base_protocol_types>(sc_gen_unique_name("pOnfiBus")));
 			pOnfiBus.at(chanIndex)->register_nb_transport_bw(this, &TeraSController::nb_transport_bw, chanIndex);
-
-
+			
 			mCmdDispatchEvent.push_back(new sc_event(sc_gen_unique_name("mCmdDispatchEvent")));
 			mTrigCmdDispEvent.push_back(new sc_event(sc_gen_unique_name("mTrigCmdDispEvent")));
 			mChanMgrEvent.push_back(new sc_event(sc_gen_unique_name("mChanMgrEvent")));
@@ -1821,6 +1893,8 @@ namespace  CrossbarTeraSLib {
 			mBegRespEvent.push_back(new sc_event(sc_gen_unique_name("mBegRespEvent")));
 			mEndReadEvent.push_back(new sc_event(sc_gen_unique_name("mEndReadEvent")));
 
+			mPhyDL1FreeEvent.push_back(new sc_event(sc_gen_unique_name("mPhyDL1FreeEvent")));
+			
 			mCreditPositiveEvent.push_back(new sc_event(sc_gen_unique_name("mEndReadEvent")));
 
 			mRespQueue.push_back(new tlm_utils::peq_with_get<tlm::tlm_generic_payload>(sc_gen_unique_name("respQueueEvent")));
@@ -1869,8 +1943,6 @@ namespace  CrossbarTeraSLib {
 			mCheckRespProcOpt.at(chanIndex)->dont_initialize();
 			sc_spawn(sc_bind(&TeraSController::checkRespProcess, \
 				this, chanIndex), sc_gen_unique_name("checkRespProcess"), mCheckRespProcOpt.at(chanIndex));
-
-
 		}//for
 	}
 

@@ -153,12 +153,13 @@ bool SlotManager::removeSlotFromList(uint16_t& tags, uint16_t& slotNum)
 		}
 		
 	}
+	return false;
 }
 
 uint16_t SlotManager::getTag(uint16_t& slotIndex)
 {
 	std::list<uint16_t>::iterator pos;
-	uint16_t tag;
+	uint16_t tag = 0;
 	for (uint16_t tagIndex = 0; tagIndex < mSlotNum; tagIndex++)
 	{
 
@@ -169,7 +170,7 @@ uint16_t SlotManager::getTag(uint16_t& slotIndex)
 			return tag;
 		}
 	}
-
+	return tag;
 }
 uint16_t SlotManager::getListSize(uint16_t& tags)
 {

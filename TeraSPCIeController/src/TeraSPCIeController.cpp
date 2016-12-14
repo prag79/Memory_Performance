@@ -670,6 +670,7 @@ namespace  CrossbarTeraSLib {
 		{
 			wait(*(mAscqNotFullEvent.at(chanNum)));
 		}
+
 		std::ostringstream msg;
 		msg.str("");
 		msg << "READ COMMAND: "
