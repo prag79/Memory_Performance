@@ -1148,7 +1148,7 @@ namespace  CrossbarTeraSLib {
 			  to Long Queue*/
 			uint64_t pendingCmd;
 			currentTime = sc_time_stamp();
-
+			
 			/*Push the WRITE command into the pending queue*/
 			createPendingCmdEntry(cmd, pendingCmd);
 			mPendingCmdQueue.at(chanNum)->notify(pendingCmd, mProgramTime);

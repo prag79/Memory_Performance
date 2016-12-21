@@ -118,7 +118,9 @@ private:
 	uint8_t* mCmdPayload;
 	uint64_t mSlotTableEntry;
 	uint8_t mValidCnt;
-	
+
+	uint64_t mNumCmdInFlight;
+	uint64_t mNumCmdCompleted;
 
 	double mCmdTransferTime;
 	double mDataTransferTime;
@@ -158,7 +160,7 @@ private:
 	void testCaseFromWorkLoad();
 	void popCmdFromSQ(std::vector<CmdQueueField>::iterator& sqPtr, \
 		uint32_t& wrkldIoSize, uint32_t& lastCwCnt, uint8_t& numSlotReq,\
-		bool& isNoCmdLeft, int16_t& slotReqIndex, cmdField& payload);
+		int16_t& slotReqIndex, cmdField& payload);
 	void setCmdParameter(uint32_t ioSize, uint16_t& cwCount, uint32_t& lastCount, uint8_t& numSlotReq)
 	{
 		uint8_t remSlot;
@@ -240,6 +242,7 @@ private:
 	void freeSlot(uint16_t& slotIndex);
 	void freeSlotWithWorkload(uint16_t& slotIndex);
 	void emptySlot(uint16_t& slotIndex);
+	void emptySlotWithWorkload(uint16_t& slotIndex);
 	void findStartLatency(double& startLatency, uint16_t slotNum);
 	bool findQueueEntry(std::vector<CmdQueueField>::iterator& index, const uint16_t slotNum);
 
@@ -302,7 +305,6 @@ private:
 	bool mEnableSameBankTest;
 };
 
-
 #pragma region CONSTRUCTOR
 TestBenchTop::TestBenchTop(sc_module_name nm, uint32_t ioSize, uint32_t blockSize, uint32_t cwSize, \
 	uint32_t numCmd, uint32_t pageSize, uint32_t bankNum,
@@ -349,6 +351,8 @@ TestBenchTop::TestBenchTop(sc_module_name nm, uint32_t ioSize, uint32_t blockSiz
 	, mPollWaitTime(pollWaitTime)
 	, mCmdCount(0)
 	, mEnableSameBankTest(false)
+	, mNumCmdInFlight(0)
+	, mNumCmdCompleted(0)
 {
 	srand((unsigned int)time(NULL));
 
@@ -579,6 +583,7 @@ TestBenchTop::TestBenchTop(sc_module_name nm, uint32_t ioSize, uint32_t blockSiz
 
 #pragma endregion
 
+#pragma region HELPER_METHODS
 void TestBenchTop::unpack(uint8_t* payload, uint16_t& slotNum, uint8_t& cwCnt, bool& cmd)
 {
 	uint16_t* data = reinterpret_cast<uint16_t*> (payload);
@@ -806,1086 +811,7 @@ uint64_t TestBenchTop::getPayloadMask()
 
 }
 
-/** testCaseWriteReadThread()
-* sc_thread;creates cmd payload(read or write)
-* and sends  to the controller .also generates
-* LBA(sequential or random)
-* @return void
-**/
-void TestBenchTop::testCaseWriteReadThread()
-{
 
-	uint16_t slotIndex = 0;
-	std::ostringstream msg;
-	uint64_t lba = 0;
-	uint64_t cmdIndex = 0;
-	uint8_t lbaSkipGap = (uint8_t)(mBlockSize / mCwSize);
-	uint8_t queueCount = 0;
-	uint8_t validCount = 0;
-	uint32_t ddrAddress = 0;
-	uint16_t numSlot;
-	bool logIOPS = false;
-	bool firstSlotIndexed = false;
-	uint32_t numSlotsReserved = 0;
-	bool fetchCompletionQueue = false;
-	uint64_t effectiveLba = 0;
-	uint64_t cmdPayload = 0;
-	uint8_t slotReqIndex = 0;
-	uint16_t tags;
-	uint8_t remSlot;
-	//uint8_t numSlotCount = mSlotManagerObj.getNumSlotRequired(mBlockSize, mIoSize, mCwSize, remSlot);//Find number of slots needed to send command
-	bool pollFlag = true;
-	bool slotNotFree = false;
-	cmdField payload;
-	uint64_t maxNumCmd;
-	std::vector<CmdQueueField>::iterator sqPtr;
-	sc_core::sc_time delay = sc_time(0, SC_NS);
-	//If Number of commands are less than QD
-	//make QD equal to Number of commands
-	if (mCmdQueueSize > mNumCmd)
-	{
-		mCmdQueueSize = mNumCmd;
-	}
-	mQueueDepth = mCmdQueueSize;
-
-	uint8_t numSlotReq = mSlotManagerObj.getNumSlotRequired(mBlockSize, mIoSize, mCwSize, remSlot);
-	
-	if (mIoSize >= mBlockSize)
-	{
-		lbaSkipGap = mBlockSize / mCwSize;
-		maxNumCmd = mNumCmd * (mIoSize / mBlockSize);
-	}
-	else
-	{
-		lbaSkipGap = mIoSize / mCwSize;
-		maxNumCmd = mNumCmd;
-	}
-
-	sendReadWriteCommands(cmdIndex);
-	
-	//This loop is run after commands equal to QD is sent
-	while (!mSlotContainer.empty())
-	{
-		uint8_t validCount = 0;
-		CmdQueueField queueEntry;
-		
-		getCompletionQueue(queueCount, validCount);
-
-		//if commands are completed
-		if (queueCount)
-		{
-			sc_time currTime = sc_time_stamp();
-			for (uint8_t CmplQIndex = 0; CmplQIndex < validCount; CmplQIndex++)
-			{
-				uint16_t slotIndex = 0;
-				
-				//Read one slot
-				readCompletionQueueData(CmplQIndex, slotIndex);
-				freeSlot(slotIndex);
-				
-				popSlotFromQueue(slotIndex);
-				if (cmdIndex < maxNumCmd)
-				{
-					if (mCmdCount < mNumCmd)
-					{
-						wait(mTrigCmdDispatchEvent);
-					}
-					//if slot is free and commands are still left to process					
-					if (!slotNotFree)
-					{
-						/*Find the SQ entry which needs to be dispatched*/
-						for (sqPtr = mSubQueue.begin(); sqPtr != mSubQueue.end(); sqPtr++)
-						{
-							if ((sqPtr->isDispatched == false) && (sqPtr->isCmdDone == false))
-							{
-								payload = sqPtr->payload;
-								break;
-							}
-						}
-						
-					}
-					//Send sub Commands
-					while (slotReqIndex < numSlotReq)
-					{
-						if (mSlotManagerObj.getAvailableSlot(numSlot))
-						{
-							if (!firstSlotIndexed)
-							{
-								firstSlotIndexed = true;
-								mSlotManagerObj.getFreeTags(tags);
-								mSlotManagerObj.addFirstSlotNum(tags, numSlot);
-								sqPtr->isDispatched = true;
-							}
-							mSlotContainer.push_back(numSlot);
-							slotNotFree = false;
-							mSlotManagerObj.addSlotToList(tags, numSlot);
-							mLogFileHandler << "TestCase: "
-								<< " @Time= " << dec << sc_time_stamp().to_double() << " ns"
-								<< " Slot Number= " << dec << (uint32_t)numSlot
-								<< endl;
-
-							uint64_t tempLba = payload.lba + lba;
-							mLBAReport->writeFile("LBA", sc_time_stamp().to_double(), tempLba, " ");
-							if (payload.d == ioDir::write)
-							{
-								sendWrite(effectiveLba, cmdPayload, numSlot, tempLba);
-							}
-							else
-							{
-								sendRead(effectiveLba, cmdPayload, numSlot, tempLba);
-							}
-
-							cmdIndex++;
-							lba += lbaSkipGap;
-							slotReqIndex++;
-							
-						}//if (mSlotManagerObj.getAvailableSlot(numSlot))
-						else
-						{
-							slotNotFree = true;
-							break;
-						}//else
-
-					}//while (slotReqIndex < (int16_t)numSlotCount)
-
-					if (!slotNotFree)
-					{
-						//if all the sub commands are sent
-						slotReqIndex = 0;
-						lba = 0;
-						firstSlotIndexed = false;
-					}
-				}//if (cmdIndex < mNumCmd)
-			}//for(uint8_t CompCmdIndex = 0; CompCmdIndex < validCount; CompCmdIndex++)
-		}//if (queueCount)
-		else
-		{
-			//if command is not there in the completion queue
-			// then wait for some time and poll again
-			wait(mPollWaitTime, SC_NS);
-		}
-	
-	}//while (!mSlotQueue.empty())
-
-	if (mSlotContainer.empty())
-	{
-
-		sc_time lastCmdTime = sc_time_stamp();
-		sc_time delayTime = lastCmdTime - mFirstCmdTime;
-		mIOPSReport->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), " ");
-		mIOPSReportCsv->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), ",");
-		logIOPS = true;
-		mTrafficGen.closeReadModeFile();
-		sc_stop();
-	}
-}
-
-/** sendReadWriteCommands(uint32_t& cmdIndex)
-* creates cmd payload(read or write)
-* and sends  to the controller.also generates
-* LBA(sequential or random)
-* Called by testCaseReadWriteThread()
-* @return void
-**/
-void TestBenchTop::sendReadWriteCommands(uint64_t& cmdIndex)
-{
-
-	int32_t queueIndex = 0;
-	uint16_t numSlot = 0;
-	testCmdType cmd;
-	bool firstSlotIndexed = false;
-	uint64_t effectiveLba = 0;
-	uint64_t cmdPayload = 0;
-	uint8_t queueCount = 0;
-	uint8_t validCount = 0;
-	uint64_t lba = 0;
-	uint8_t lbaSkipGap = (uint8_t)(mBlockSize / mCwSize);
-	uint8_t remSlot;
-	bool isSlotBusy = false;
-	CmdQueueField queueEntry;
-	cmdField payload;
-
-	for (std::vector<CmdQueueField>::iterator it = mSubQueue.begin(); it != mSubQueue.end(); it++)
-	{
-		uint8_t numSlotReq = mSlotManagerObj.getNumSlotRequired(mBlockSize, mIoSize, mCwSize, remSlot);
-		uint16_t firstSlot;
-		uint16_t tags;
-		int16_t slotReqIndex = 0;
-		
-		uint8_t validCount = 0;
-		
-		/*Fetch data from the front of the vector*/
-		queueEntry = *it;// mSubQueue.front();
-		//mSubQueue.pop();
-		payload = queueEntry.payload;
-		//mTrafficGen.getCommands(payload);
-		while (slotReqIndex < (int16_t)numSlotReq)
-		{
-			if (mSlotManagerObj.getAvailableSlot(numSlot))
-			{
-				//mSlotQueue.push(numSlot);
-				if (!firstSlotIndexed)
-				{
-					firstSlot = numSlot;
-					mSlotManagerObj.getFreeTags(tags);
-					firstSlotIndexed = true;
-					mSlotManagerObj.addFirstSlotNum(tags, numSlot);
-
-					/*SQ is indexed using slot number*/
-					it->isDispatched = true;
-					it->slotNum = numSlot;
-		
-				}
-
-				mSlotManagerObj.addSlotToList(tags, numSlot);
-				mSlotContainer.push_back(numSlot);
-				uint64_t tempLba = payload.lba + lba;
-
-				mLBAReport->writeFile("LBA", sc_time_stamp().to_double(), tempLba, " ");
-
-				if (payload.d == ioDir::write)
-				{
-					cmd = WRITE_CMD;
-				}
-				else
-				{
-					cmd = READ_CMD;
-				}
-				mLogFileHandler << "TestCase: "
-					<< " @Time= " << dec << sc_time_stamp().to_double() << " ns"
-					<< " Slot Number= " << dec << (uint32_t)numSlot
-					<< endl;
-
-				if (cmd == WRITE_CMD)
-				{
-					sendWrite(effectiveLba, cmdPayload, numSlot, tempLba);
-				}
-				else if (cmd == READ_CMD)
-				{
-					sendRead(effectiveLba, cmdPayload, numSlot, tempLba);
-				}
-				cmdIndex++;
-				lba += lbaSkipGap;
-				slotReqIndex++;
-			}//if (mSlotManagerObj.getAvailableSlot(numSlot))
-			else
-			{
-				//Ping completion queue till any slot is free
-				processCompletionQueue(isSlotBusy);
-			}
-		}//while(slotReqIndex < (int16_t)numSlotReq)
-		firstSlotIndexed = false;
-		lba = 0;
-		queueIndex++;
-		//mSqPtr = it;
-	}//while(queueIndex < (int32_t)mCmdQueueSize)
-}
-
-#pragma region WORKLOAD_TEST_CASE
-void TestBenchTop::testCaseFromWorkLoad()
-{
-	std::ostringstream msg;
-	uint64_t effectiveLba = 0;
-	uint64_t cmdPayload = 0;
-	uint8_t lbaSkipGap = (uint8_t)(mBlockSize / mCwSize);
-	uint64_t lba = 0;
-	uint32_t ddrAddress = 0;
-	std::string cmdString;
-	bool logIOPS = false;
-
-	uint32_t cwCnt;
-	uint64_t cmdIndex = 0;//used to calculate IOPS
-	int16_t slotReqIndex = 0;
-	uint16_t tags;
-	bool pollFlag3 = true;
-	uint8_t queueCount = 0;
-	uint8_t validCount = 0;
-	uint16_t numSlot = 0;
-	uint32_t lastCwCnt;
-	uint16_t slotIndex = 0;
-	bool firstSlotIndexed = false;
-	uint8_t numSlotReq;
-	sc_core::sc_time delay = sc_time(0, SC_NS);
-	std::vector<CmdQueueField>::iterator sqPtr;
-	bool slotNotFree = false;
-	bool isNoCmdLeft = false;
-	cmdField payload;
-	uint32_t wrkldIoSize;
-
-	if (mCmdQueueSize > mSlotNum)
-	{
-		mCmdQueueSize = mSlotNum;
-	}
-
-	mQueueDepth = mCmdQueueSize;
-
-	sc_time firstCmdTime = sc_time_stamp();
-
-	bool pollFlag2 = true;
-	//loop till commands till the configured queue depth
-	// is sent , exit if end of file is reached
-
-	sendWrkldCmdsQD(cmdIndex);
-
-	//poll for empty slots and keep sending commands till
-	//end of file is reached
-	while (!mSlotContainer.empty() )
-	{
-		/*if (!mWrkLoad.isEOF())
-		{*/
-		if (pollFlag2)
-		{
-			wait(mPollWaitTime, SC_NS);
-			pollFlag2 = false;
-		}
-		getCompletionQueue(queueCount, validCount);
-
-		if (queueCount)
-		{
-			for (uint8_t CmplQIndex = 0; CmplQIndex < validCount; CmplQIndex++)
-			{
-				//Read one slot
-				readCompletionQueueData(CmplQIndex, slotIndex);
-				popSlotFromQueue(slotIndex);
-				freeSlot(slotIndex);
-				
-				
-				//if (!mWrkLoad.isEOF())
-				//{
-					mIsCmdCompleted = false;
-					if (!slotNotFree)
-					{
-						/*Find the SQ entry which needs to be dispatched*/
-						popCmdFromSQ(sqPtr, wrkldIoSize, lastCwCnt, numSlotReq, isNoCmdLeft, slotReqIndex, payload);
-				
-					}
-					/*If there is no command left in the submission queue to be
-					dispatched then do not execute the while loop*/
-
-					if (!isNoCmdLeft)
-					{
-						
-						while (slotReqIndex < (int16_t)numSlotReq)
-						{
-							if ((numSlotReq - slotReqIndex) == 1)
-							{
-								if (lastCwCnt != 0)
-									cwCnt = lastCwCnt;
-
-							}
-							if (mSlotManagerObj.getAvailableSlot(numSlot))
-							{
-								slotNotFree = false;
-								if (!firstSlotIndexed)
-								{
-									mSlotManagerObj.getFreeTags(tags);
-									firstSlotIndexed = true;
-									mSlotManagerObj.addFirstSlotNum(tags, numSlot);
-									sqPtr->isDispatched = true;
-									sqPtr->slotNum = numSlot;
-								}
-								/*Push the slot number into a vector
-								This is done to keep track of the number
-								of slots that needs to be processed*/
-								mIoSizeReport->writeFile("IOSIZE", sc_time_stamp().to_double(), 512 * cwCnt, " ");
-								mSlotContainer.push_back(numSlot);
-								mSlotManagerObj.addSlotToList(tags, numSlot);
-								mLBAReport->writeFile("LBA", sc_time_stamp().to_double(), lba, " ");
-
-								mLogFileHandler << "TestCase: "
-									<< " @Time= " << dec << sc_time_stamp().to_double() << " ns"
-									<< " Slot Number= " << dec << (uint32_t)numSlot
-									<< endl;
-
-								if (payload.d == ioDir::read)
-								{
-									sendRead(effectiveLba, cmdPayload, numSlot, payload.lba, payload.cwCnt);
-								}
-								else
-								{
-									sendWrite(effectiveLba, cmdPayload, numSlot, payload.lba, payload.cwCnt);
-								}
-
-								cmdIndex++;
-								slotReqIndex++;
-								lbaSkipGap = cwCnt;
-								lba += lbaSkipGap;
-							}//if (mSlotManagerObj.getAvailableSlot(numSlot))
-							else
-							{
-								slotNotFree = true;
-								break;
-							}//else
-						}//while (slotReqIndex < (int16_t)numSlotCount)
-						//if all the sub commands are sent
-
-						if (!slotNotFree)
-						{
-							slotReqIndex = 0;
-							lba = 0;
-    						firstSlotIndexed = false;
-						}
-					}
-				//}//if (!mWrkLoad.isEOF())
-			}//for
-		}//if (queueCount)
-		else
-		{
-			wait(mPollWaitTime, SC_NS);
-		}
-	}//while (!mSlotQueue.empty())
-	//}//while (!mWrkLoad.isEOF())
-
-	if (mSlotContainer.empty() && mWrkLoad.isEOF())
-	{
-		sc_time lastCmdTime = sc_time_stamp();
-		sc_time delayTime = lastCmdTime - firstCmdTime;
-		mIOPSReport->writeFile(delayTime.to_double(), (double)(cmdIndex * 1000 / delayTime.to_double()), " ");
-		mIOPSReportCsv->writeFile(delayTime.to_double(), (double)(cmdIndex * 1000 / delayTime.to_double()), ",");
-		mNumCmdReport->writeFile(cmdIndex);
-		sc_stop();
-	}
-
-}
-
-void TestBenchTop::popCmdFromSQ(std::vector<CmdQueueField>::iterator& sqPtr, uint32_t& wrkldIoSize,\
-	uint32_t& lastCwCnt, uint8_t& numSlotReq,\
-	bool& isNoCmdLeft, int16_t& slotReqIndex, cmdField& payload)
-{
-	for (sqPtr = mSubQueue.begin(); sqPtr != mSubQueue.end(); sqPtr++)
-	{
-		if ((sqPtr->isDispatched == false) && (sqPtr->isCmdDone == false))
-		{
-			payload = sqPtr->payload;
-			isNoCmdLeft = false;
-			/*Calculate IOSize*/
-			wrkldIoSize = 512 * payload.cwCnt;
-
-			/*Calculate number of slots required for the command*/
-			setCmdParameter(wrkldIoSize, payload.cwCnt, lastCwCnt, numSlotReq);
-			slotReqIndex = 0;
-			break;
-		}
-		else
-		{
-			isNoCmdLeft = true;
-		}
-	}
-}
-void TestBenchTop::sendWrkldCmdsQD( uint64_t& cmdIndex)
-{
-
-	uint32_t queueIndex = 0;
-	uint16_t numSlot = 0;
-
-	bool firstSlotIndexed = false;
-	uint8_t numSlotReq;
-
-	uint32_t wrkldIoSize;
-	uint32_t lastCwCnt;
-	testCmdType cmd;
-	uint16_t tags;
-	int16_t slotReqIndex = 0;
-	bool slotNotFree = false;
-	bool isSlotBusy = false;
-	CmdQueueField queueEntry;
-	cmdField payload;
-	uint64_t effectiveLba = 0;
-	uint64_t cmdPayload = 0;
-	uint8_t lbaSkipGap = 0;
-	for (std::vector<CmdQueueField>::iterator it = mSubQueue.begin(); it != mSubQueue.end(); it++)
-	{
-		/*Fetch data from the front of the vector*/
-		queueEntry = *it;
-
-		/*Fetch the payload*/
-		payload = queueEntry.payload;
-
-		/*Calculate IOSize*/
-		wrkldIoSize = 512 * payload.cwCnt;
-
-		/*Calculate the number of slots required*/
-		setCmdParameter(wrkldIoSize, payload.cwCnt, lastCwCnt, numSlotReq);
-		slotReqIndex = 0;
-
-		while (slotReqIndex < (int16_t)numSlotReq)
-		{
-			/*If last sub command then cw Cnt is the residue*/
-			if ((numSlotReq - slotReqIndex) == 1)
-			{
-				if (lastCwCnt != 0)
-					payload.cwCnt = lastCwCnt;
-			}
-
-			if (mSlotManagerObj.getAvailableSlot(numSlot))
-			{
-
-				if (!firstSlotIndexed)
-				{
-					mSlotManagerObj.getFreeTags(tags);
-					firstSlotIndexed = true;
-					mSlotManagerObj.addFirstSlotNum(tags, numSlot);
-					it->isDispatched = true;
-					it->slotNum = numSlot;
-
-				}
-				slotNotFree = false;
-				/* List of sub commands that make up a command
-				add it to the list*/
-				mSlotManagerObj.addSlotToList(tags, numSlot);
-
-				/*Used to track no. of slots done*/
-				mSlotContainer.push_back(numSlot);
-
-				mLBAReport->writeFile("LBA", sc_time_stamp().to_double(), payload.lba, " ");
-				mIoSizeReport->writeFile("IOSIZE", sc_time_stamp().to_double(), 512 * payload.cwCnt, " ");
-
-				if (payload.d == ioDir::read)
-				{
-					cmd = READ_CMD;
-				}
-				else {
-					cmd = WRITE_CMD;
-				}
-
-				mLogFileHandler << "TestCase: "
-					<< " @Time= " << dec << sc_time_stamp().to_double() << " ns"
-					<< " Slot Number= " << dec << (uint32_t)numSlot
-					<< endl;
-
-				if (cmd == WRITE_CMD)
-				{
-					sendWrite(effectiveLba, cmdPayload, numSlot, payload.lba, payload.cwCnt);
-				}
-
-				if (cmd == READ_CMD)
-				{
-					sendRead(effectiveLba, cmdPayload, numSlot, payload.lba, payload.cwCnt);
-				}
-
-				/* Increment Command Count*/
-				cmdIndex++;
-				lbaSkipGap = (uint8_t)payload.cwCnt;
-				payload.lba += lbaSkipGap;
-				slotReqIndex++;
-			}//if (mSlotManagerObj.getAvailableSlot(numSlot))
-			else
-			{
-				processCompletionQueue(isSlotBusy);
-
-			}//else
-		}//while(slotReqIndex < (int16_t)numSlotReq)
-		firstSlotIndexed = false;
-		queueIndex++;
-
-	}//while(queueIndex < mCmdQueueSize)
-}
-
-void TestBenchTop::sQThreadWorkload()
-{
-	/*Open the workload file*/
-	mWrkLoad.openReadModeFile();
-	std::string cmdType;
-	uint32_t cwCnt;
-	uint64_t lba;
-
-	cmdField payload;
-	uint32_t cmdIndex = 0;
-
-	mFreeSpace = mQueueDepth;
-	mFirstCmdTime = sc_time_stamp();
-
-	for (uint32_t queueIndex = 0; queueIndex < mQueueDepth; queueIndex++)
-	{
-		if (!mWrkLoad.isEOF())
-		{
-			mWrkLoad.readFile(cmdType, lba, cwCnt);
-			CmdQueueField queueEntry;
-
-			queueEntry.startDelay = sc_time_stamp().to_double();
-			queueEntry.payload.cwCnt = cwCnt;
-			queueEntry.payload.lba = lba;
-			if (cmdType == "R")
-			{
-				queueEntry.payload.d = ioDir::read;
-			}
-			else
-				queueEntry.payload.d = ioDir::write;
-
-			queueEntry.isDispatched = false;
-			queueEntry.isCmdDone = false;
-			mSubQueue.push_back(queueEntry);
-			//mCmdQueueIndex.at(cmdIndex) = cmdIndex;
-			mCmdCount++;
-			cmdIndex++;
-		}
-		//}
-	}
-	mTrigCmdDispatchEvent.notify(SC_ZERO_TIME);
-	wait(mTrigSubCmdEvent);
-	while (1)
-	{
-		
-			while (!mSlotIndexQueue.empty() && !mWrkLoad.isEOF())
-			{
-
-				uint16_t slotNum = mSlotIndexQueue.front();
-				mSlotIndexQueue.pop();
-
-				mWrkLoad.readFile(cmdType, lba, cwCnt);
-
-				for (std::vector<CmdQueueField>::iterator it = mSubQueue.begin(); it != mSubQueue.end(); it++)
-				{
-					if ((it->slotNum == slotNum) && (it->isDispatched == true) && (it->isCmdDone == true))
-					{
-						it->payload.cwCnt = cwCnt;
-						it->payload.lba = lba;
-						if (cmdType == "R")
-						{
-							it->payload.d = ioDir::read;
-						}
-						else
-							it->payload.d = ioDir::write;
-
-						it->startDelay = sc_time_stamp().to_double();
-						it->isDispatched = false;
-						it->isCmdDone = false;
-
-						break;
-					}
-
-
-				}
-				cmdIndex++;
-				mCmdCount++;
-
-			}
-			mFreeSpace = 0;
-			mTrigCmdDispatchEvent.notify(SC_ZERO_TIME);
-			wait(mTrigSubCmdEvent);
-		
-			if (mWrkLoad.isEOF())
-			{
-				wait();
-			}
-
-	}
-}
-#pragma endregion
-
-void TestBenchTop::mcore_threadFromWorkLoad(int cpuNum, int numCmdPerThread, uint32_t residualCmd)
-{
-	uint64_t lba = 0;
-	testCmdType cmd;
-	uint64_t effectiveLba = 0;
-	uint64_t cmdPayload = 0;
-	//uint32_t numCmdPerThread = 0;
-	uint8_t lbaSkipGap = (uint8_t)(mBlockSize / mCwSize);
-	sc_time waitTime = sc_time(0, SC_NS);
-	bool cmdStatus = false;
-	std::string cmdType;
-	uint32_t cwCnt;
-	//uint32_t wrkldIoSize = 0;
-	bool firstSlotIndexed = false;
-	uint8_t remSlot;
-	uint32_t tempCwCnt;
-	uint32_t lastCwCnt;
-	uint16_t numSlot = cpuNum;
-	numCmdPerThread += residualCmd;
-
-	mWrkLoad.openReadModeFile();
-	for (uint32_t cmdIndex = 0; cmdIndex < (uint32_t)numCmdPerThread; cmdIndex++)
-	{
-		mWrkLoad.readFile(cmdType, lba, cwCnt);
-		/*Calculate IOSize*/
-		uint32_t wrkldIoSize = 512 * cwCnt;
-
-		/*Number of slots required */
-		uint8_t numSlotReq = mSlotManagerObj.getNumSlotRequired(mBlockSize, wrkldIoSize, mCwSize, remSlot);
-		if (wrkldIoSize >= mBlockSize)
-		{
-			tempCwCnt = (uint32_t)abs((double)mBlockSize / mCwSize);
-			if (remSlot != 0)
-			{
-				lastCwCnt = (uint32_t)abs((double)(cwCnt - numSlotReq * (mBlockSize / mCwSize)));
-			}
-			else
-			{
-				lastCwCnt = 0;
-			}
-			cwCnt = tempCwCnt;
-		}
-		else if (wrkldIoSize < mBlockSize)
-		{
-			cwCnt = wrkldIoSize / mCwSize;
-			lastCwCnt = 0;
-		}
-		numSlotReq += remSlot;
-
-		uint16_t tags;
-		int16_t slotReqIndex = 0;
-		while (slotReqIndex < (int16_t)numSlotReq)
-		{
-			if (!firstSlotIndexed)
-			{
-				mSlotManagerObj.getFreeTags(tags);
-				firstSlotIndexed = true;
-				mSlotManagerObj.addFirstSlotNum(tags, numSlot);
-				mLatency.at(tags).startDelay = sc_time_stamp().to_double();
-			}
-			mSlotManagerObj.addSlotToList(tags, numSlot);
-			mLBAReport->writeFile("LBA", sc_time_stamp().to_double(), lba, " ");
-			if (cmdType == "R")
-			{
-				cmd = READ_CMD;
-			}
-			else {
-				cmd = WRITE_CMD;
-			}
-
-			mLogFileHandler << "TestCase: "
-				<< " @Time= " << dec << sc_time_stamp().to_double() << " ns"
-				<< " Slot Number= " << dec << (uint32_t)numSlot
-				<< " CPU Number" << dec << cpuNum
-				<< endl;
-
-			if (cmd == WRITE_CMD)
-			{
-				bus_arbiter.lock();
-				if ((numSlotReq - slotReqIndex) == 1)
-				{
-					if (lastCwCnt != 0)
-						cwCnt = lastCwCnt;
-
-				}
-				sendWrite(effectiveLba, cmdPayload, numSlot, lba, cwCnt);
-				bus_arbiter.unlock();
-				waitTime = sc_time(mPollWaitTime, SC_NS);
-			}
-
-			if (cmd == READ_CMD)
-			{
-				bus_arbiter.lock();
-				if ((numSlotReq - slotReqIndex) == 1)
-				{
-					if (lastCwCnt != 0)
-						cwCnt = lastCwCnt;
-
-				}
-				sendRead(effectiveLba, cmdPayload, numSlot, lba, cwCnt);
-				bus_arbiter.unlock();
-				waitTime = sc_time(mPollWaitTime, SC_NS);
-			}
-			lbaSkipGap = cwCnt;
-			lba += lbaSkipGap;
-			slotReqIndex++;
-
-			while (1)
-			{
-				readCompletionQueue(numSlot, cmdStatus, waitTime);
-				waitTime = sc_time(mPollWaitTime, SC_NS);
-				if (cmdStatus)
-				{
-					if (cmd == READ_CMD)
-					{
-						//int cwCnt = (mBlockSize / mCwSize);
-						bus_arbiter.lock();
-						checkData(numSlot, cwCnt, lba);
-						bus_arbiter.unlock();
-					}
-					uint16_t tags;
-					if (mSlotManagerObj.removeSlotFromList(tags, numSlot))
-					{
-						if (mSlotQueue.size() != 0)
-							mSlotQueue.pop();
-						if (mSlotManagerObj.getListSize(tags) == 0)
-						{
-							mLatency.at(tags).endDelay = sc_time_stamp().to_double();
-							mLatency.at(tags).latency = mLatency.at(tags).endDelay - mLatency.at(tags).startDelay;
-							mSlotManagerObj.resetTags(tags);
-							uint16_t slotNum = mSlotManagerObj.getFirstSlotNum(tags);
-							mLatencyRep->writeFile(numSlot, mLatency.at(tags).latency / 1000, " ");
-							mLatencyRepCsv->writeFile(numSlot, mLatency.at(tags).latency / 1000, ",");
-							//cmdCounter++;
-						}
-						mSlotManagerObj.freeSlot(numSlot);
-					}
-					break;
-				}
-			}//while(1)
-			//}//else
-		}//while(slotReqIndex < (int16_t)numSlotReq)
-		firstSlotIndexed = false;
-		cmdCounter++;
-	}//for (uint32_t cmdIndex = 0; 
-	/*if (cmdCounter == mNumCmdWrkld)
-	{
-	if (mLogIOPS == false)
-	{
-	sc_time lastCmdTime = sc_time_stamp();
-	sc_time delayTime = lastCmdTime - mFirstCmdTime;
-	mIOPSReport->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), " ");
-	mIOPSReportCsv->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), ",");
-	mLogIOPS = true;
-	}
-	wait(500, SC_NS);
-	sc_stop();
-
-	}*/
-
-}
-
-void TestBenchTop::multiThreadFromWorkLoad()
-{
-	mWrkLoad.openReadModeFile();
-
-	std::string text;
-	while (!mWrkLoad.isEOF())
-	{
-		mWrkLoad.readLine(text);
-		mNumCmdWrkld++;
-	}
-	mWrkLoad.closeFile();
-	//mNumCmdWrkld--;
-	if (mNumCmdWrkld < (uint64_t)mNumCore)
-	{
-		mNumCore = (uint32_t)mNumCmdWrkld;
-	}
-	if (mNumCmdWrkld / mNumCore >= 1)
-	{
-		for (uint8_t numCores = 0; numCores < mNumCore; numCores++)
-		{
-			numCmdPerThread[numCores] = (uint32_t)mNumCmdWrkld / mNumCore;
-		}
-	}
-	else
-	{
-		for (uint8_t numCores = 0; numCores < mNumCore; numCores++)
-		{
-			numCmdPerThread[numCores] = (uint32_t)mNumCmdWrkld;
-		}
-	}
-	residualCmd[0] = (uint32_t)mNumCmdWrkld % mNumCore;
-	for (uint32_t numCores = 1; numCores < (uint32_t)mNumCore; numCores++)
-	{
-		residualCmd[numCores] = 0;
-	}
-	mFirstCmdTime = sc_time_stamp();
-
-	for (uint8_t numCores = 0; numCores < mNumCore; numCores++)
-	{
-		sc_spawn(sc_bind(&TestBenchTop::mcore_threadFromWorkLoad, \
-			this, numCores, numCmdPerThread[numCores], residualCmd[numCores]), sc_gen_unique_name("mcore_threadFromWorkLoad"));
-	}
-
-	while (1)
-	{
-		if (cmdCounter == mNumCmdWrkld)
-		{
-
-			if (mLogIOPS == false)
-			{
-				sc_time lastCmdTime = sc_time_stamp();
-				sc_time delayTime = lastCmdTime - mFirstCmdTime;
-				mIOPSReport->writeFile(delayTime.to_double(), (double)(mNumCmdWrkld * 1000 / delayTime.to_double()), " ");
-				mLogIOPS = true;
-			}
-			wait(mPollWaitTime, SC_NS);
-			break;
-		}
-		else
-		{
-			wait(mPollWaitTime, SC_NS);
-		}
-	}
-	sc_stop();
-}
-
-void TestBenchTop::mcore_thread(int cpuNum, int numCmdPerThread, uint32_t residualCmd)
-{
-	uint64_t lba = 0;
-	testCmdType cmd;
-	uint16_t numSlot = (uint16_t)cpuNum;
-	uint64_t effectiveLba = 0;
-	uint64_t cmdPayload = 0;
-	//uint32_t numCmdPerThread = 0;
-	uint8_t lbaSkipGap = (uint8_t)(mBlockSize / mCwSize);
-	sc_time waitTime = sc_time(0, SC_NS);
-	bool cmdStatus = false;
-	bool firstSlotIndexed = false;
-	cmdField payload;
-	uint8_t remSlot;
-	numCmdPerThread += residualCmd;
-		
-	mTrafficGen.openReadModeFile();
-	
-	uint64_t cmdCount = 0;
-	/*if (mCmdType == 0){
-	cmd = WRITE;
-	}
-	else if (mCmdType == 1){
-	cmd = READ;
-	}*/
-
-	for (uint32_t cmdIndex = 0; cmdIndex < (uint32_t)numCmdPerThread; cmdIndex++)
-	{
-		mTrafficGen.readCommand(payload);
-		uint8_t numSlotReq = mSlotManagerObj.getNumSlotRequired(mBlockSize, mIoSize, mCwSize, remSlot);
-		if (mIoSize >= mBlockSize)
-		{
-			lbaSkipGap = mBlockSize / mCwSize;
-		}
-		else
-		{
-			lbaSkipGap = mIoSize / mCwSize;
-		}
-
-
-		uint16_t tags;
-		int16_t slotReqIndex = 0;
-		while (slotReqIndex < (int16_t)numSlotReq)
-		{
-			if (!firstSlotIndexed)
-			{
-				mSlotManagerObj.getFreeTags(tags);
-				firstSlotIndexed = true;
-				mSlotManagerObj.addFirstSlotNum(tags, numSlot);
-				mLatency.at(tags).startDelay = sc_time_stamp().to_double();
-			}
-			mSlotManagerObj.addSlotToList(tags, numSlot);
-			uint64_t tempLba = payload.lba;
-			mLBAReport->writeFile("LBA", sc_time_stamp().to_double(), tempLba, " ");
-
-			mLogFileHandler << "TestCase: "
-				<< " @Time= " << dec << sc_time_stamp().to_double() << " ns"
-				<< " Slot Number= " << dec << (uint32_t)numSlot
-				<< " CPU Number" << dec << cpuNum
-				<< endl;
-			if (payload.d == ioDir::read)
-			{
-				cmd = READ_CMD;
-			}
-			else
-			{
-				cmd = WRITE_CMD;
-			}
-			if (cmd == WRITE_CMD)
-			{
-				bus_arbiter.lock();
-				sendWrite(effectiveLba, cmdPayload, numSlot, tempLba);
-				slotReqIndex++;
-				bus_arbiter.unlock();
-				waitTime = sc_time(mPollWaitTime, SC_NS);
-			}
-
-			if (cmd == READ_CMD)
-			{
-				bus_arbiter.lock();
-				sendRead(effectiveLba, cmdPayload, numSlot, tempLba);
-				slotReqIndex++;
-				bus_arbiter.unlock();
-				waitTime = sc_time(mPollWaitTime, SC_NS);
-			}
-			
-			bool pollFlag = true;
-			while (1)
-			{
-				if (pollFlag)
-				{
-					wait(mPollWaitTime, SC_NS);
-					pollFlag = false;
-				}
-				readCompletionQueue(numSlot, cmdStatus, waitTime);
-
-				waitTime = sc_time(mPollWaitTime, SC_NS);
-				if (cmdStatus)
-				{
-					
-					if (cmd == READ_CMD)
-					{
-						int cwCnt = (mBlockSize / mCwSize);
-						bus_arbiter.lock();
-						checkData(numSlot, cwCnt, payload.lba);
-						bus_arbiter.unlock();
-					}
-					uint16_t tags;
-					if (mSlotManagerObj.removeSlotFromList(tags, numSlot))
-					{
-						if (mSlotQueue.size() != 0)
-							mSlotQueue.pop();
-						if (mSlotManagerObj.getListSize(tags) == 0)
-						{
-							mLatency.at(tags).endDelay = sc_time_stamp().to_double();
-							mLatency.at(tags).latency = mLatency.at(tags).endDelay - mLatency.at(tags).startDelay;
-							mSlotManagerObj.resetTags(tags);
-							uint16_t slotNum = mSlotManagerObj.getFirstSlotNum(tags);
-							mLatencyRep->writeFile(numSlot, mLatency.at(tags).latency / 1000, " ");
-							mLatencyRepCsv->writeFile(numSlot, mLatency.at(tags).latency / 1000, ",");
-						}
-						mSlotManagerObj.freeSlot(numSlot);
-					}
-					break;
-				}
-			}//while(1)
-		}//while(slotReqIndex < (int16_t)numSlotReq)
-		firstSlotIndexed = false;
-		cmdCounter++;
-		lba = 0;
-	}//for (uint32_t cmdIndex = 0;
-
-	/*if (cmdCounter == mNumCmd)
-	{
-	sc_stop();
-	}*/
-	if (cmdCounter == mNumCmd)
-	{
-		if (mLogIOPS == false)
-		{
-			sc_time lastCmdTime = sc_time_stamp();
-			sc_time delayTime = lastCmdTime - mFirstCmdTime;
-			mIOPSReport->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), " ");
-			mIOPSReportCsv->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), ",");
-			mLogIOPS = true;
-		}
-		//wait(500, SC_NS);
-		sc_stop();
-
-	}
-}
-
-void TestBenchTop::multiThread()
-{
-	sc_time firstCmdTime = sc_time_stamp();
-	mTrafficGen.openReadModeFile();
-	for (uint8_t numCores = 0; numCores < mNumCore; numCores++)
-	{
-		sc_spawn(sc_bind(&TestBenchTop::mcore_thread, \
-			this, numCores, numCmdPerThread[numCores], residualCmd[numCores]), sc_gen_unique_name("mcore_thread"));
-	}
-	mTrafficGen.closeReadModeFile();
-	/*while (1)
-	{
-	if (cmdCounter == mNumCmd)
-	{
-
-	if (mLogIOPS == false)
-	{
-	sc_time lastCmdTime = sc_time_stamp();
-	sc_time delayTime = lastCmdTime - firstCmdTime;
-	mIOPSReport->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), " ");
-	mIOPSReportCsv->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), ",");
-	mLogIOPS = true;
-	}
-	wait(500, SC_NS);
-	break;
-	}
-	else
-	{
-	wait(500, SC_NS);
-	}
-	}
-	sc_stop();*/
-}
 /** Generate command payload
 * @param cmdType command Type
 * @param lba starting LBA
@@ -2148,12 +1074,6 @@ void TestBenchTop::getCompletionQueue(uint8_t& queueCount, uint8_t& validCount)
 	memcpy(&queueCount, (mReadCompletionQueue + 0), 1);
 	memset(mCompletionCmdEntry, 0x00, MAX_VALID_COMPLETION_ENTRIES);
 
-	//read completion entries and store it in the array
-	//for (uint8_t cmdIndex = 0; cmdIndex < MAX_VALID_COMPLETION_ENTRIES; cmdIndex++)
-	//{
-	//	memcpy((uint8_t*)(mCompletionCmdEntry + cmdIndex), (uint8_t*)(mReadCompletionQueue + cmdIndex * COMPLETION_WORD_SIZE + 1), COMPLETION_WORD_SIZE);
-	//	//mCompletionCmdEntry[cmdIndex] = *((uint16_t*)mReadCompletionQueue + cmdIndex + 1);
-	//}
 	validCount = 0;
 	validCount = (queueCount >= MAX_VALID_COMPLETION_ENTRIES) ? (MAX_VALID_COMPLETION_ENTRIES) : (queueCount);
 }
@@ -2267,7 +1187,7 @@ void TestBenchTop::checkData(const uint16_t& slotIndex, const uint16_t& rxCwCoun
 	//mDataGenObj.getData(expData, lba, (rxCwCount * mCwSize));
 
 	loadData(ddrAddress, rxData, (rxCwCount * mCwSize));
-		
+
 	delete[] expData;
 	delete[] rxData;
 }
@@ -2301,6 +1221,1515 @@ string TestBenchTop::appendParameters(string name, string format){
 }
 
 
+void TestBenchTop::findStartLatency(double& startLatency, uint16_t slotNum)
+{
+
+	for (std::vector<testCmdLatencyData>::iterator it = mQueueLatency.begin(); it != mQueueLatency.end(); it++)
+	{
+		if ((it->slotNum == slotNum) && (it->isDone == true))
+		{
+			startLatency = it->startDelay;
+			//mQueueLatency.erase(it);
+			break;
+		}
+	}
+}
+
+void TestBenchTop::processCompletionQueue(bool& isSlotBusy)
+{
+	bool pollFlag1 = true;
+	uint8_t queueCount = 0;
+	uint8_t validCount = 0;
+	//If slots are not available then poll
+	while (1)
+	{
+
+		if (/*if isSlotBusy is false ; then ping the controller completion queue
+			; this flag is needed so that we do not ping the CQ again if all the completed commands fetched by the TB is
+			not processed by TB in the earlier pass*/
+			!isSlotBusy
+			)
+		{
+			/*ping the CQ*/
+			getCompletionQueue(queueCount, validCount);
+			mQueueCount = queueCount;
+			mValidCount = validCount;
+			mByteIndex = 0;
+		}
+		uint16_t slotIndex;
+		if (/*If there is a valid number of commands in the CQ*/
+			mQueueCount
+			)
+		{
+			while (/*Process commands in CQ one by one
+				   */
+				   mByteIndex < mValidCount
+				   )
+			{
+
+				/*Read Completion queue and extract slot number from the
+				payload*/
+				readCompletionQueueData(mByteIndex, slotIndex);
+
+				/*Mark this flag true so that the TB does not ping the CQ again in the next pass
+				as all the commands are not processed in the earlier pass*/
+				isSlotBusy = true;
+				/*Free Slot so that it can be re-used*/
+				emptySlot(slotIndex);
+
+				mByteIndex++;
+
+				if (/*If even a single command is processed
+					then break out of this loop and let the main loop dispatch more commands to the controller
+					*/
+					mIsCmdCompleted
+					)
+				{
+					mIsCmdCompleted = false;
+					break;
+				}
+
+			}
+			if (/*If all the commands in CQ are processed then mark isSlotBusy to true so that the CQ can be pinged again
+				*/
+				mByteIndex == mValidCount
+				)
+			{
+				/*All the entry in the completion queue is processed*/
+				isSlotBusy = false;
+				break;
+			}
+
+
+		}
+		else
+		{
+			wait(mPollWaitTime, SC_NS);
+		}
+	}//while (1)
+}
+
+
+/*Empty Slot when run out of slots during dispatching of commands
+from the SQ*/
+void TestBenchTop::emptySlot(uint16_t& slotIndex)
+{
+	uint16_t tags;
+
+	if (mSlotManagerObj.removeSlotFromList(tags, slotIndex))
+	{
+		if (mSlotManagerObj.getListSize(tags) == 0)
+		{
+			uint32_t qIndex = 0;
+
+			/*mLatency.at(tags).endDelay = sc_time_stamp().to_double();
+			mLatency.at(tags).latency = mLatency.at(tags).endDelay - mLatency.at(tags).startDelay;*/
+			mSlotManagerObj.resetTags(tags);
+			uint16_t slotNum = mSlotManagerObj.getFirstSlotNum(tags);
+			std::vector<CmdQueueField>::iterator index;
+
+			if (findQueueEntry(index, slotNum))
+			{
+				CmdQueueField queueEntry;
+				queueEntry = *index;// mSubQueue.front();
+
+				double latency = sc_time_stamp().to_double() - queueEntry.startDelay;
+				//mSubQueue.pop();
+
+				mFreeSpace++;
+				//free Submission queue
+				//mSubQueue.erase(index);
+				mLatencyRep->writeFile(slotNum, latency / 1000, " ");
+				mLatencyRepCsv->writeFile(slotNum, latency / 1000, ",");
+
+				mSlotIndexQueue.push(slotNum);
+
+				if (mEnableWorkLoad)
+				{
+					if (!mWrkLoad.isEOF())
+						mTrigSubCmdEvent.notify(SC_ZERO_TIME);
+				}
+				else {
+					if (mCmdCount < mNumCmd)
+						mTrigSubCmdEvent.notify(SC_ZERO_TIME);
+				}
+
+				mNumCmdInFlight--;
+				mNumCmdCompleted++;
+				mIsCmdCompleted = true;
+			}
+
+		}
+		mSlotManagerObj.freeSlot(slotIndex);
+	}
+}
+#pragma endregion
+
+#pragma region NORMAL_TEST_CASES
+/** testCaseWriteReadThread()
+* sc_thread;creates cmd payload(read or write)
+* and sends  to the controller .also generates
+* LBA(sequential or random)
+* @return void
+**/
+void TestBenchTop::testCaseWriteReadThread()
+{
+
+	uint16_t slotIndex = 0;
+	std::ostringstream msg;
+	uint64_t lba = 0;
+	uint64_t cmdIndex = 0;
+	uint8_t lbaSkipGap = (uint8_t)(mBlockSize / mCwSize);
+	uint8_t queueCount = 0;
+	uint8_t validCount = 0;
+	uint32_t ddrAddress = 0;
+	uint16_t numSlot;
+	bool logIOPS = false;
+	bool firstSlotIndexed = false;
+	uint32_t numSlotsReserved = 0;
+	bool fetchCompletionQueue = false;
+	uint64_t effectiveLba = 0;
+	uint64_t cmdPayload = 0;
+	uint8_t slotReqIndex = 0;
+	uint16_t tags;
+	uint8_t remSlot;
+	//uint8_t numSlotCount = mSlotManagerObj.getNumSlotRequired(mBlockSize, mIoSize, mCwSize, remSlot);//Find number of slots needed to send command
+	bool pollFlag = true;
+	bool slotNotFree = false;
+	cmdField payload;
+	uint64_t maxNumCmd;
+	
+	std::vector<CmdQueueField>::iterator sqPtr;
+	sc_core::sc_time delay = sc_time(0, SC_NS);
+	//If Number of commands are less than QD
+	//make QD equal to Number of commands
+	if (mCmdQueueSize > mNumCmd)
+	{
+		mCmdQueueSize = mNumCmd;
+	}
+	mQueueDepth = mCmdQueueSize;
+
+	uint8_t numSlotReq = mSlotManagerObj.getNumSlotRequired(mBlockSize, mIoSize, mCwSize, remSlot);
+	
+	if (mIoSize >= mBlockSize)
+	{
+		lbaSkipGap = mBlockSize / mCwSize;
+		maxNumCmd = mNumCmd * (mIoSize / mBlockSize);
+	}
+	else
+	{
+		lbaSkipGap = mIoSize / mCwSize;
+		maxNumCmd = mNumCmd;
+	}
+
+	/*Dispatch commands correspond to queue depth*/
+	sendReadWriteCommands(cmdIndex);
+	
+	//This loop is run after commands equal to QD is sent
+	while (mNumCmdInFlight)
+	{
+		uint8_t validCount = 0;
+		CmdQueueField queueEntry;
+
+		getCompletionQueue(queueCount, validCount);
+
+		//if commands are completed
+		if (queueCount)
+		{
+			for (uint8_t CmplQIndex = 0; CmplQIndex < validCount; CmplQIndex++)
+			{
+				uint16_t slotIndex = 0;
+
+				//Read one slot
+				readCompletionQueueData(CmplQIndex, slotIndex);
+				freeSlot(slotIndex);
+
+				if (
+					/*If we still have more sub-commands to be processed*/
+					(cmdIndex < maxNumCmd)
+					/*if we have atleast one commmand complete*/
+					&& (mIsCmdCompleted == true)
+					/*If more commands are left to be processed*/
+					//&& (mCmdCount < mNumCmd)
+					)
+				{
+						
+					mIsCmdCompleted = false;
+					if (/*if there are more commands to be submitted
+						then trigger the submission queue thread to push commands in the
+						SQ */
+						mCmdCount < mNumCmd
+						) {
+
+						mTrigSubCmdEvent.notify(SC_ZERO_TIME);
+						wait(mTrigCmdDispatchEvent);
+					}
+
+										
+					if (/*if slot are available*/
+						!slotNotFree
+						)
+					{
+						/*Find the SQ entry which needs to be dispatched*/
+						for (sqPtr = mSubQueue.begin(); sqPtr != mSubQueue.end(); sqPtr++)
+						{
+							if (/* if the SQ Entry cmd is not dispatched*/
+								(sqPtr->isDispatched == false)
+								/*If the SQ Entry cmd is not already completed*/
+								&& (sqPtr->isCmdDone == false)
+								/*which means that it is a new command*/
+								)
+							{
+								payload = sqPtr->payload;
+								//Send sub Commands
+								while (slotReqIndex < numSlotReq)
+								{
+									if (/*If we have slot available to be assigned to incoming command*/
+										mSlotManagerObj.getAvailableSlot(numSlot)
+										)
+									{
+										if (/*If it is the first slot of the linked list; it
+											is used if a command is broken down into multiple subcommands
+											i.e IOSize > BlockSize; they we have to maintain the link list of all the sub commands
+											*/
+											!firstSlotIndexed
+											)
+										{
+											firstSlotIndexed = true;
+											/*Fetch a link list tag*/
+											mSlotManagerObj.getFreeTags(tags);
+											/*Identify the link list with this tag and map this tag with the first slot number*/
+											mSlotManagerObj.addFirstSlotNum(tags, numSlot);
+
+											/*Since this SQ entry cmd is to be dispatched to the controller;
+											Mark isDispatched flag to be true*/
+											sqPtr->isDispatched = true;
+											/*Assign that SQ Entry new slot*/
+											sqPtr->slotNum = numSlot;
+											mNumCmdInFlight++;
+										}
+
+										slotNotFree = false;
+										/*Insert the slot to the LL corresponds to the tag*/
+										mSlotManagerObj.addSlotToList(tags, numSlot);
+
+										mLogFileHandler << "TestCase: "
+											<< " @Time= " << dec << sc_time_stamp().to_double() << " ns"
+											<< " Slot Number= " << dec << (uint32_t)numSlot
+											<< endl;
+
+										/*Increment the lba by lba skipgap*/
+										uint64_t tempLba = payload.lba + lba;
+
+										mLBAReport->writeFile("LBA", sc_time_stamp().to_double(), tempLba, " ");
+
+
+										if (/*If payload is WRITE */
+											payload.d == ioDir::write
+											)
+										{
+											sendWrite(effectiveLba, cmdPayload, numSlot, tempLba);
+										}
+										else /*Payload is READ*/
+										{
+											sendRead(effectiveLba, cmdPayload, numSlot, tempLba);
+										}
+
+										cmdIndex++;
+										lba += lbaSkipGap;
+										slotReqIndex++;
+
+									}//if (mSlotManagerObj.getAvailableSlot(numSlot))
+									else
+									{
+										/*No Slots available
+										 break out of the main loop and start pinging
+										 the CQ*/
+										slotNotFree = true;
+										break;
+									}//else
+
+								}//while (slotReqIndex < (int16_t)numSlotCount)
+								if (!slotNotFree)
+								{
+									//if all the sub commands are sent
+									slotReqIndex = 0;
+									lba = 0;
+									firstSlotIndexed = false;
+								}
+								break;
+							}//if()
+						}//for
+
+					}//if
+				}//if(cmdIndex < maxNumCmd) 
+
+			}//for(uint8_t CompCmdIndex = 0; CompCmdIndex < validCount; CompCmdIndex++)
+		}//if (queueCount)
+		else
+		{
+			//if command is not there in the completion queue
+			// then wait for some time and ping again
+			wait(mPollWaitTime, SC_NS);
+		}
+
+	}//while (mNumCmdInFlight)
+
+	if (mNumCmdInFlight ==0)
+	{
+
+		sc_time lastCmdTime = sc_time_stamp();
+		sc_time delayTime = lastCmdTime - mFirstCmdTime;
+		mIOPSReport->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), " ");
+		mIOPSReportCsv->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), ",");
+		logIOPS = true;
+		mTrafficGen.closeReadModeFile();
+		sc_stop();
+	}
+}
+
+/** sendReadWriteCommands(uint32_t& cmdIndex)
+* creates cmd payload(read or write)
+* and sends  to the controller.also generates
+* LBA(sequential or random)
+* Called by testCaseReadWriteThread()
+* @return void
+**/
+void TestBenchTop::sendReadWriteCommands(uint64_t& cmdIndex)
+{
+
+	int32_t queueIndex = 0;
+	uint16_t numSlot = 0;
+	testCmdType cmd;
+	bool firstSlotIndexed = false;
+	uint64_t effectiveLba = 0;
+	uint64_t cmdPayload = 0;
+	uint8_t queueCount = 0;
+	uint8_t validCount = 0;
+	uint64_t lba = 0;
+	uint8_t lbaSkipGap = (uint8_t)(mBlockSize / mCwSize);
+	uint8_t remSlot;
+	bool isSlotBusy = false;
+	CmdQueueField queueEntry;
+	cmdField payload;
+	uint8_t numSlotReq = mSlotManagerObj.getNumSlotRequired(mBlockSize, mIoSize, mCwSize, remSlot);
+
+	for (std::vector<CmdQueueField>::iterator it = mSubQueue.begin(); it != mSubQueue.end(); it++)
+	{
+		uint16_t firstSlot;
+		uint16_t tags;
+		int16_t slotReqIndex = 0;
+		uint8_t validCount = 0;
+		
+		/*Fetch data from the front of the vector*/
+		queueEntry = *it;// mSubQueue.front();
+		//mSubQueue.pop();
+		payload = queueEntry.payload;
+		
+		while (/*If there are multiple sub-commands */
+			   slotReqIndex < (int16_t)numSlotReq
+			   )
+		{
+			if (mSlotManagerObj.getAvailableSlot(numSlot))
+			{
+				
+				if (!firstSlotIndexed)
+				{
+					firstSlot = numSlot;
+					mSlotManagerObj.getFreeTags(tags);
+					firstSlotIndexed = true;
+					mSlotManagerObj.addFirstSlotNum(tags, numSlot);
+					mNumCmdInFlight++;
+					/*SQ is indexed using slot number*/
+					it->isDispatched = true;
+					it->slotNum = numSlot;
+		
+				}
+
+				mSlotManagerObj.addSlotToList(tags, numSlot);
+			
+				uint64_t tempLba = payload.lba + lba;
+
+				mLBAReport->writeFile("LBA", sc_time_stamp().to_double(), tempLba, " ");
+
+				if (payload.d == ioDir::write)
+				{
+					cmd = WRITE_CMD;
+				}
+				else
+				{
+					cmd = READ_CMD;
+				}
+				mLogFileHandler << "TestCase: "
+					<< " @Time= " << dec << sc_time_stamp().to_double() << " ns"
+					<< " Slot Number= " << dec << (uint32_t)numSlot
+					<< endl;
+
+				if (cmd == WRITE_CMD)
+				{
+					sendWrite(effectiveLba, cmdPayload, numSlot, tempLba);
+				}
+				else if (cmd == READ_CMD)
+				{
+					sendRead(effectiveLba, cmdPayload, numSlot, tempLba);
+				}
+				cmdIndex++;
+				lba += lbaSkipGap;
+				slotReqIndex++;
+			}//if (mSlotManagerObj.getAvailableSlot(numSlot))
+			else
+			{
+				//Ping completion queue till any slot is free
+				/*As soon as one full command is done break out of this process and start 
+				dispatching more command*/
+				processCompletionQueue(isSlotBusy);
+			}
+		}//while(slotReqIndex < (int16_t)numSlotReq)
+		firstSlotIndexed = false;
+		lba = 0;
+		queueIndex++;
+		//mSqPtr = it;
+	}//while(queueIndex < (int32_t)mCmdQueueSize)
+}
+
+
+void TestBenchTop::submissionQueueThread()
+{
+	if (mNumCmd < mQueueDepth)
+	{
+		mQueueDepth = mNumCmd;
+	}
+	cmdField payload;
+	uint32_t cmdIndex = 0;
+	mTrafficGen.openReadModeFile();
+	mFreeSpace = mQueueDepth;
+	mFirstCmdTime = sc_time_stamp();
+
+	mTrafficGen.openWriteModeFile();
+	if (mEnableSameBankTest)
+	{
+		/*This method generates successive commands with LBA to
+		pointing to the same bank albeit different page*/
+		mTrafficGen.writeCommandsToSameBanks(mNumCmd);
+	}
+	else
+	{
+		mTrafficGen.writeCommands(mNumCmd);
+	}
+	mTrafficGen.closeWriteModeFile();
+
+	for (uint32_t queueIndex = 0; queueIndex < mQueueDepth; queueIndex++)
+	{
+		if (mCmdCount < mNumCmd)
+		{
+			mTrafficGen.getCommands(payload);
+			CmdQueueField queueEntry;
+
+			queueEntry.startDelay = sc_time_stamp().to_double();
+
+			queueEntry.payload = payload;
+			queueEntry.isDispatched = false;
+			queueEntry.isCmdDone = false;
+			mSubQueue.push_back(queueEntry);
+			mCmdCount++;
+			cmdIndex++;
+
+		}
+	}
+	mTrigCmdDispatchEvent.notify(SC_ZERO_TIME);
+	wait(mTrigSubCmdEvent);
+	while (1)
+	{
+		if (mCmdCount != mNumCmd)
+		{
+
+			while (!mSlotIndexQueue.empty())
+			{
+				/*Get the slot that has completed*/
+				uint16_t slotNum = mSlotIndexQueue.front();
+				mSlotIndexQueue.pop();
+
+				for (std::vector<CmdQueueField>::iterator it = mSubQueue.begin(); it != mSubQueue.end(); it++)
+				{
+					/*Check if the cmd corresponding to slot has already been dispatched and completed*/
+					if ((it->slotNum == slotNum) && (it->isDispatched == true) && (it->isCmdDone == true))
+					{
+						/*Push new command into the SQ entry*/
+						mTrafficGen.getCommands(payload);
+						it->payload = payload;
+						it->startDelay = sc_time_stamp().to_double();
+
+						/*reset the corresponding flags*/
+						it->isDispatched = false;
+						it->isCmdDone = false;
+						cmdIndex++;
+						mCmdCount++;
+						/*testCmdLatencyData latencyData;
+						latencyData.startDelay = sc_time_stamp().to_double();
+						latencyData.endDelay = 0;
+						latencyData.slotNum = 0;
+						latencyData.isDone = false;
+						mQueueLatency.push_back(latencyData);*/
+						break;
+					}
+
+				}
+
+				mFreeSpace = 0;
+				/*Notify testReadWriteThread that new command is available to be processed*/
+				mTrigCmdDispatchEvent.notify(SC_ZERO_TIME);
+
+				/*Wait for more commands to be completed*/
+				wait(mTrigSubCmdEvent);
+			}//while()
+		}
+		else
+		{
+			wait();
+		}
+
+	}
+}
+
+
+bool TestBenchTop::findQueueEntry(std::vector<CmdQueueField>::iterator& index, const uint16_t slotNum)
+{
+	std::ostringstream msg;
+	std::vector<CmdQueueField>::iterator it;
+
+	for (it = mSubQueue.begin(); it != mSubQueue.end(); it++)
+	{
+
+		if ((it->slotNum == slotNum) && (it->isCmdDone == false) && (it->isDispatched == true))
+		{
+			it->isCmdDone = true;
+			//it->isDispatched = false;
+			index = it;
+
+			return true;
+
+		}
+
+	}
+	return false;
+
+}
+
+void TestBenchTop::freeSlot(uint16_t& slotIndex)
+{
+	uint16_t tags;
+
+	if (/*Remove the slot from the LL */
+		mSlotManagerObj.removeSlotFromList(tags, slotIndex)
+		)
+	{
+		if (/*If all the sub-commands of a command (IOSize > BlockSize) is
+			done */
+			mSlotManagerObj.getListSize(tags) == 0
+			)
+		{
+			uint32_t qIndex = 0;
+
+			mSlotManagerObj.resetTags(tags);
+			uint16_t slotNum = mSlotManagerObj.getFirstSlotNum(tags);
+			std::vector<CmdQueueField>::iterator index;
+
+			/*Find the entry in the submission queue corresponding to the command being completed and
+			then set the isCmdDone flag to true to signal that the corresponding entry in the SQ is available to be
+			populated*/
+			if (/*Find entry corresponding to the completed slot in the SQ
+				*/
+				findQueueEntry(index, slotNum)
+				)
+			{
+				CmdQueueField queueEntry = *index;
+				/*Calculate latency for the completed command */
+				double latency = sc_time_stamp().to_double() - queueEntry.startDelay;
+				mFreeSpace++;
+
+				/*Write latency numbers to file*/
+				mLatencyRep->writeFile(slotNum, latency / 1000, " ");
+				mLatencyRepCsv->writeFile(slotNum, latency / 1000, ",");
+
+				mNumCmdInFlight--;
+				mNumCmdCompleted++;
+
+				/*Indicate other processes that command is complete*/
+				mIsCmdCompleted = true;
+				mSlotIndexQueue.push(slotNum);
+
+			}
+
+
+		}
+		mSlotManagerObj.freeSlot(slotIndex);
+	}//if
+}
+
+
+#pragma endregion
+
+#pragma region WORKLOAD_TEST_CASE
+
+void TestBenchTop::testCaseFromWorkLoad()
+{
+	std::ostringstream msg;
+	uint64_t effectiveLba = 0;
+	uint64_t cmdPayload = 0;
+	uint8_t lbaSkipGap = (uint8_t)(mBlockSize / mCwSize);
+	uint64_t lba = 0;
+	uint32_t ddrAddress = 0;
+	std::string cmdString;
+	bool logIOPS = false;
+
+	uint32_t cwCnt;
+	uint64_t cmdIndex = 0;//used to calculate IOPS
+	int16_t slotReqIndex = 0;
+	uint16_t tags;
+	bool pollFlag3 = true;
+	uint8_t queueCount = 0;
+	uint8_t validCount = 0;
+	uint16_t numSlot = 0;
+	uint32_t lastCwCnt;
+	uint16_t slotIndex = 0;
+	bool firstSlotIndexed = false;
+	uint8_t numSlotReq;
+	sc_core::sc_time delay = sc_time(0, SC_NS);
+	std::vector<CmdQueueField>::iterator sqPtr;
+	bool slotNotFree = false;
+	bool isNoCmdLeft = false;
+	cmdField payload;
+	uint32_t wrkldIoSize;
+
+	if (mCmdQueueSize > mSlotNum)
+	{
+		mCmdQueueSize = mSlotNum;
+	}
+
+	mQueueDepth = mCmdQueueSize;
+
+	sc_time firstCmdTime = sc_time_stamp();
+
+	bool pollFlag2 = true;
+	//loop till commands till the configured queue depth
+	// is sent , exit if end of file is reached
+
+	sendWrkldCmdsQD(cmdIndex);
+
+	//poll for empty slots and keep sending commands till
+	//end of file is reached
+	while (mNumCmdInFlight)
+	{
+		/*if (!mWrkLoad.isEOF())
+		{*/
+		if (pollFlag2)
+		{
+			wait(mPollWaitTime, SC_NS);
+			pollFlag2 = false;
+		}
+		getCompletionQueue(queueCount, validCount);
+
+		if (queueCount)
+		{
+			for (uint8_t CmplQIndex = 0; CmplQIndex < validCount; CmplQIndex++)
+			{
+				//Read one slot
+				readCompletionQueueData(CmplQIndex, slotIndex);
+
+				freeSlotWithWorkload(slotIndex);
+
+				//if (!mWrkLoad.isEOF())
+				//{
+
+				if (/*If EOF is not reached*/
+					!mWrkLoad.isEOF()
+					&&
+					/*If atleast one command is done */
+					(mIsCmdCompleted == true)
+					)
+				{
+					mIsCmdCompleted = false;
+					mTrigSubCmdEvent.notify(SC_ZERO_TIME);
+					wait(mTrigCmdDispatchEvent);
+
+					if (/*If slot is available*/
+						!slotNotFree
+						)
+					{
+
+						/*Find the SQ entry which needs to be dispatched*/
+						popCmdFromSQ(sqPtr, wrkldIoSize, lastCwCnt, numSlotReq, slotReqIndex, payload);
+
+						while (slotReqIndex < (int16_t)numSlotReq)
+						{
+							if ((numSlotReq - slotReqIndex) == 1)
+							{
+								if (lastCwCnt != 0)
+									cwCnt = lastCwCnt;
+
+							}
+							if (mSlotManagerObj.getAvailableSlot(numSlot))
+							{
+								slotNotFree = false;
+								if (!firstSlotIndexed)
+								{
+									mSlotManagerObj.getFreeTags(tags);
+									firstSlotIndexed = true;
+									mSlotManagerObj.addFirstSlotNum(tags, numSlot);
+									sqPtr->isDispatched = true;
+									sqPtr->slotNum = numSlot;
+									mNumCmdInFlight++;
+								}
+								/*Push the slot number into a vector
+								This is done to keep track of the number
+								of slots that needs to be processed*/
+								mIoSizeReport->writeFile("IOSIZE", sc_time_stamp().to_double(), 512 * cwCnt, " ");
+
+								mSlotManagerObj.addSlotToList(tags, numSlot);
+								mLBAReport->writeFile("LBA", sc_time_stamp().to_double(), lba, " ");
+
+								mLogFileHandler << "TestCase: "
+									<< " @Time= " << dec << sc_time_stamp().to_double() << " ns"
+									<< " Slot Number= " << dec << (uint32_t)numSlot
+									<< endl;
+
+								if (payload.d == ioDir::read)
+								{
+									sendRead(effectiveLba, cmdPayload, numSlot, payload.lba, payload.cwCnt);
+								}
+								else
+								{
+									sendWrite(effectiveLba, cmdPayload, numSlot, payload.lba, payload.cwCnt);
+								}
+
+								cmdIndex++;
+								slotReqIndex++;
+								lbaSkipGap = cwCnt;
+								lba += lbaSkipGap;
+							}//if (mSlotManagerObj.getAvailableSlot(numSlot))
+							else
+							{
+								/*If slots are not available to disptach
+								current command; set slotNotFree to true
+								and break out of the while (slotReqIndex < (int16_t)numSlotReq)
+								and read  CQ again*/
+								slotNotFree = true;
+								break;
+							}//else
+						}//while (slotReqIndex < (int16_t)numSlotCount)
+						//if all the sub commands are sent
+
+						if (!slotNotFree)
+						{
+							slotReqIndex = 0;
+							lba = 0;
+							firstSlotIndexed = false;
+						}
+						/*Break out of the for loop after dispatching one command*/
+						break;
+					}//if (!slotNotFree)
+
+				}//if (!mWrkLoad.isEOF())
+			}//for(uint8_t CmplQIndex = 0; CmplQIndex < validCount; CmplQIndex++)
+		}//if (queueCount)
+		else
+		{
+			wait(mPollWaitTime, SC_NS);
+		}
+	}//while (mNumCmdInFlight)
+	
+	if ((mNumCmdInFlight == 0) && mWrkLoad.isEOF())
+	{
+		sc_time lastCmdTime = sc_time_stamp();
+		sc_time delayTime = lastCmdTime - firstCmdTime;
+		mIOPSReport->writeFile(delayTime.to_double(), (double)(cmdIndex * 1000 / delayTime.to_double()), " ");
+		mIOPSReportCsv->writeFile(delayTime.to_double(), (double)(cmdIndex * 1000 / delayTime.to_double()), ",");
+		mNumCmdReport->writeFile(cmdIndex);
+		sc_stop();
+	}
+
+}
+
+void TestBenchTop::popCmdFromSQ(std::vector<CmdQueueField>::iterator& sqPtr, uint32_t& wrkldIoSize,\
+	uint32_t& lastCwCnt, uint8_t& numSlotReq,\
+ int16_t& slotReqIndex, cmdField& payload)
+{
+	for (sqPtr = mSubQueue.begin(); sqPtr != mSubQueue.end(); sqPtr++)
+	{
+		if ((sqPtr->isDispatched == false) && (sqPtr->isCmdDone == false))
+		{
+			payload = sqPtr->payload;
+			
+			/*Calculate IOSize*/
+			wrkldIoSize = 512 * payload.cwCnt;
+
+			/*Calculate number of slots required for the command*/
+			setCmdParameter(wrkldIoSize, payload.cwCnt, lastCwCnt, numSlotReq);
+			slotReqIndex = 0;
+			
+		}
+		
+	}
+}
+
+void TestBenchTop::sendWrkldCmdsQD( uint64_t& cmdIndex)
+{
+
+	uint32_t queueIndex = 0;
+	uint16_t numSlot = 0;
+
+	bool firstSlotIndexed = false;
+	uint8_t numSlotReq;
+
+	uint32_t wrkldIoSize;
+	uint32_t lastCwCnt;
+	testCmdType cmd;
+	uint16_t tags;
+	int16_t slotReqIndex = 0;
+	bool slotNotFree = false;
+	bool isSlotBusy = false;
+	CmdQueueField queueEntry;
+	cmdField payload;
+	uint64_t effectiveLba = 0;
+	uint64_t cmdPayload = 0;
+	uint8_t lbaSkipGap = 0;
+	for (std::vector<CmdQueueField>::iterator it = mSubQueue.begin(); it != mSubQueue.end(); it++)
+	{
+		/*Fetch data from the front of the vector*/
+		queueEntry = *it;
+
+		/*Fetch the payload*/
+		payload = queueEntry.payload;
+
+		/*Calculate IOSize*/
+		wrkldIoSize = 512 * payload.cwCnt;
+
+		/*Calculate the number of slots required*/
+		setCmdParameter(wrkldIoSize, payload.cwCnt, lastCwCnt, numSlotReq);
+		slotReqIndex = 0;
+
+		while (slotReqIndex < (int16_t)numSlotReq)
+		{
+			/*If last sub command then cw Cnt is the residue*/
+			if ((numSlotReq - slotReqIndex) == 1)
+			{
+				if (lastCwCnt != 0)
+					payload.cwCnt = lastCwCnt;
+			}
+
+			if (mSlotManagerObj.getAvailableSlot(numSlot))
+			{
+
+				if (!firstSlotIndexed)
+				{
+					mSlotManagerObj.getFreeTags(tags);
+					firstSlotIndexed = true;
+					mSlotManagerObj.addFirstSlotNum(tags, numSlot);
+					it->isDispatched = true;
+					it->slotNum = numSlot;
+					mNumCmdInFlight++;
+				}
+				slotNotFree = false;
+				/* List of sub commands that make up a command
+				add it to the list*/
+				mSlotManagerObj.addSlotToList(tags, numSlot);
+
+				mLBAReport->writeFile("LBA", sc_time_stamp().to_double(), payload.lba, " ");
+				mIoSizeReport->writeFile("IOSIZE", sc_time_stamp().to_double(), 512 * payload.cwCnt, " ");
+
+				if (payload.d == ioDir::read)
+				{
+					cmd = READ_CMD;
+				}
+				else {
+					cmd = WRITE_CMD;
+				}
+
+				mLogFileHandler << "TestCase: "
+					<< " @Time= " << dec << sc_time_stamp().to_double() << " ns"
+					<< " Slot Number= " << dec << (uint32_t)numSlot
+					<< endl;
+
+				if (cmd == WRITE_CMD)
+				{
+					sendWrite(effectiveLba, cmdPayload, numSlot, payload.lba, payload.cwCnt);
+				}
+
+				if (cmd == READ_CMD)
+				{
+					sendRead(effectiveLba, cmdPayload, numSlot, payload.lba, payload.cwCnt);
+				}
+
+				/* Increment Command Count*/
+				cmdIndex++;
+				lbaSkipGap = (uint8_t)payload.cwCnt;
+				payload.lba += lbaSkipGap;
+				slotReqIndex++;
+			}//if (mSlotManagerObj.getAvailableSlot(numSlot))
+			else
+			{
+				processCompletionQueue(isSlotBusy);
+
+			}//else
+		}//while(slotReqIndex < (int16_t)numSlotReq)
+		firstSlotIndexed = false;
+		queueIndex++;
+
+	}//while(queueIndex < mCmdQueueSize)
+}
+
+void TestBenchTop::sQThreadWorkload()
+{
+	/*Open the workload file*/
+	mWrkLoad.openReadModeFile();
+	std::string cmdType;
+	uint32_t cwCnt;
+	uint64_t lba;
+
+	cmdField payload;
+	uint32_t cmdIndex = 0;
+
+	mFreeSpace = mQueueDepth;
+	mFirstCmdTime = sc_time_stamp();
+
+	for (uint32_t queueIndex = 0; queueIndex < mQueueDepth; queueIndex++)
+	{
+		if (!mWrkLoad.isEOF())
+		{
+			mWrkLoad.readFile(cmdType, lba, cwCnt);
+			CmdQueueField queueEntry;
+
+			queueEntry.startDelay = sc_time_stamp().to_double();
+			queueEntry.payload.cwCnt = cwCnt;
+			queueEntry.payload.lba = lba;
+			if (cmdType == "R")
+			{
+				queueEntry.payload.d = ioDir::read;
+			}
+			else
+				queueEntry.payload.d = ioDir::write;
+
+			queueEntry.isDispatched = false;
+			queueEntry.isCmdDone = false;
+			mSubQueue.push_back(queueEntry);
+			//mCmdQueueIndex.at(cmdIndex) = cmdIndex;
+			mCmdCount++;
+			cmdIndex++;
+		}
+		//}
+	}
+	mTrigCmdDispatchEvent.notify(SC_ZERO_TIME);
+	wait(mTrigSubCmdEvent);
+	while (1)
+	{
+		
+			while (!mSlotIndexQueue.empty() && !mWrkLoad.isEOF())
+			{
+
+				uint16_t slotNum = mSlotIndexQueue.front();
+				mSlotIndexQueue.pop();
+
+				mWrkLoad.readFile(cmdType, lba, cwCnt);
+
+				for (std::vector<CmdQueueField>::iterator it = mSubQueue.begin(); it != mSubQueue.end(); it++)
+				{
+					if ((it->slotNum == slotNum) && (it->isDispatched == true) && (it->isCmdDone == true))
+					{
+						it->payload.cwCnt = cwCnt;
+						it->payload.lba = lba;
+						if (cmdType == "R")
+						{
+							it->payload.d = ioDir::read;
+						}
+						else
+							it->payload.d = ioDir::write;
+
+						it->startDelay = sc_time_stamp().to_double();
+						it->isDispatched = false;
+						it->isCmdDone = false;
+
+						break;
+					}
+
+
+				}
+				cmdIndex++;
+				mCmdCount++;
+
+			}
+			mFreeSpace = 0;
+			mTrigCmdDispatchEvent.notify(SC_ZERO_TIME);
+			wait(mTrigSubCmdEvent);
+		
+			if (mWrkLoad.isEOF())
+			{
+				wait();
+			}
+
+	}
+}
+
+void TestBenchTop::freeSlotWithWorkload(uint16_t& slotIndex)
+{
+	uint16_t tags;
+	//uint8_t numSlot = mSlotManagerObj.getListSize(tags);
+
+	if (mSlotManagerObj.removeSlotFromList(tags, slotIndex))
+	{
+		if (mSlotManagerObj.getListSize(tags) == 0)
+		{
+			uint32_t qIndex = 0;
+
+			mSlotManagerObj.resetTags(tags);
+			uint16_t slotNum = mSlotManagerObj.getFirstSlotNum(tags);
+			std::vector<CmdQueueField>::iterator index;
+
+			/*Find the entry in the submission queue corresponding to the command being completed and
+			then set the isCmdDone flag to true to signal that the corresponding entry in the SQ is available to be
+			populated*/
+			if (findQueueEntry(index, slotNum))
+			{
+				CmdQueueField queueEntry = *index;
+				double latency = sc_time_stamp().to_double() - queueEntry.startDelay;
+				mFreeSpace++;
+
+				mLatencyRep->writeFile(slotNum, latency / 1000, " ");
+				mLatencyRepCsv->writeFile(slotNum, latency / 1000, ",");
+				mSlotIndexQueue.push(slotNum);
+				
+				mIsCmdCompleted = true;
+				mNumCmdInFlight--;
+			}
+
+
+		}
+		mSlotManagerObj.freeSlot(slotIndex);
+	}//if
+}
+
+
+#pragma endregion
+
+#pragma region MULTI_CORE_WITH_WORKLOAD_TEST_CASES
+void TestBenchTop::mcore_threadFromWorkLoad(int cpuNum, int numCmdPerThread, uint32_t residualCmd)
+{
+	uint64_t lba = 0;
+	testCmdType cmd;
+	uint64_t effectiveLba = 0;
+	uint64_t cmdPayload = 0;
+	//uint32_t numCmdPerThread = 0;
+	uint8_t lbaSkipGap = (uint8_t)(mBlockSize / mCwSize);
+	sc_time waitTime = sc_time(0, SC_NS);
+	bool cmdStatus = false;
+	std::string cmdType;
+	uint32_t cwCnt;
+	//uint32_t wrkldIoSize = 0;
+	bool firstSlotIndexed = false;
+	uint8_t remSlot;
+	uint32_t tempCwCnt;
+	uint32_t lastCwCnt;
+	uint16_t numSlot = cpuNum;
+	numCmdPerThread += residualCmd;
+
+	mWrkLoad.openReadModeFile();
+	for (uint32_t cmdIndex = 0; cmdIndex < (uint32_t)numCmdPerThread; cmdIndex++)
+	{
+		mWrkLoad.readFile(cmdType, lba, cwCnt);
+		/*Calculate IOSize*/
+		uint32_t wrkldIoSize = 512 * cwCnt;
+
+		/*Number of slots required */
+		uint8_t numSlotReq = mSlotManagerObj.getNumSlotRequired(mBlockSize, wrkldIoSize, mCwSize, remSlot);
+		if (wrkldIoSize >= mBlockSize)
+		{
+			tempCwCnt = (uint32_t)abs((double)mBlockSize / mCwSize);
+			if (remSlot != 0)
+			{
+				lastCwCnt = (uint32_t)abs((double)(cwCnt - numSlotReq * (mBlockSize / mCwSize)));
+			}
+			else
+			{
+				lastCwCnt = 0;
+			}
+			cwCnt = tempCwCnt;
+		}
+		else if (wrkldIoSize < mBlockSize)
+		{
+			cwCnt = wrkldIoSize / mCwSize;
+			lastCwCnt = 0;
+		}
+		numSlotReq += remSlot;
+
+		uint16_t tags;
+		int16_t slotReqIndex = 0;
+		while (slotReqIndex < (int16_t)numSlotReq)
+		{
+			if (!firstSlotIndexed)
+			{
+				mSlotManagerObj.getFreeTags(tags);
+				firstSlotIndexed = true;
+				mSlotManagerObj.addFirstSlotNum(tags, numSlot);
+				mLatency.at(tags).startDelay = sc_time_stamp().to_double();
+			}
+			mSlotManagerObj.addSlotToList(tags, numSlot);
+			mLBAReport->writeFile("LBA", sc_time_stamp().to_double(), lba, " ");
+			if (cmdType == "R")
+			{
+				cmd = READ_CMD;
+			}
+			else {
+				cmd = WRITE_CMD;
+			}
+
+			mLogFileHandler << "TestCase: "
+				<< " @Time= " << dec << sc_time_stamp().to_double() << " ns"
+				<< " Slot Number= " << dec << (uint32_t)numSlot
+				<< " CPU Number" << dec << cpuNum
+				<< endl;
+
+			if (cmd == WRITE_CMD)
+			{
+				bus_arbiter.lock();
+				if ((numSlotReq - slotReqIndex) == 1)
+				{
+					if (lastCwCnt != 0)
+						cwCnt = lastCwCnt;
+
+				}
+				sendWrite(effectiveLba, cmdPayload, numSlot, lba, cwCnt);
+				bus_arbiter.unlock();
+				waitTime = sc_time(mPollWaitTime, SC_NS);
+			}
+
+			if (cmd == READ_CMD)
+			{
+				bus_arbiter.lock();
+				if ((numSlotReq - slotReqIndex) == 1)
+				{
+					if (lastCwCnt != 0)
+						cwCnt = lastCwCnt;
+
+				}
+				sendRead(effectiveLba, cmdPayload, numSlot, lba, cwCnt);
+				bus_arbiter.unlock();
+				waitTime = sc_time(mPollWaitTime, SC_NS);
+			}
+			lbaSkipGap = cwCnt;
+			lba += lbaSkipGap;
+			slotReqIndex++;
+
+			while (1)
+			{
+				readCompletionQueue(numSlot, cmdStatus, waitTime);
+				waitTime = sc_time(mPollWaitTime, SC_NS);
+				if (cmdStatus)
+				{
+					if (cmd == READ_CMD)
+					{
+						//int cwCnt = (mBlockSize / mCwSize);
+						bus_arbiter.lock();
+						checkData(numSlot, cwCnt, lba);
+						bus_arbiter.unlock();
+					}
+					uint16_t tags;
+					if (mSlotManagerObj.removeSlotFromList(tags, numSlot))
+					{
+						if (mSlotQueue.size() != 0)
+							mSlotQueue.pop();
+						if (mSlotManagerObj.getListSize(tags) == 0)
+						{
+							mLatency.at(tags).endDelay = sc_time_stamp().to_double();
+							mLatency.at(tags).latency = mLatency.at(tags).endDelay - mLatency.at(tags).startDelay;
+							mSlotManagerObj.resetTags(tags);
+							uint16_t slotNum = mSlotManagerObj.getFirstSlotNum(tags);
+							mLatencyRep->writeFile(numSlot, mLatency.at(tags).latency / 1000, " ");
+							mLatencyRepCsv->writeFile(numSlot, mLatency.at(tags).latency / 1000, ",");
+							//cmdCounter++;
+						}
+						mSlotManagerObj.freeSlot(numSlot);
+					}
+					break;
+				}
+			}//while(1)
+			//}//else
+		}//while(slotReqIndex < (int16_t)numSlotReq)
+		firstSlotIndexed = false;
+		cmdCounter++;
+	}//for (uint32_t cmdIndex = 0; 
+	/*if (cmdCounter == mNumCmdWrkld)
+	{
+	if (mLogIOPS == false)
+	{
+	sc_time lastCmdTime = sc_time_stamp();
+	sc_time delayTime = lastCmdTime - mFirstCmdTime;
+	mIOPSReport->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), " ");
+	mIOPSReportCsv->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), ",");
+	mLogIOPS = true;
+	}
+	wait(500, SC_NS);
+	sc_stop();
+
+	}*/
+
+}
+
+void TestBenchTop::multiThreadFromWorkLoad()
+{
+	mWrkLoad.openReadModeFile();
+
+	std::string text;
+	while (!mWrkLoad.isEOF())
+	{
+		mWrkLoad.readLine(text);
+		mNumCmdWrkld++;
+	}
+	mWrkLoad.closeFile();
+	//mNumCmdWrkld--;
+	if (mNumCmdWrkld < (uint64_t)mNumCore)
+	{
+		mNumCore = (uint32_t)mNumCmdWrkld;
+	}
+	if (mNumCmdWrkld / mNumCore >= 1)
+	{
+		for (uint8_t numCores = 0; numCores < mNumCore; numCores++)
+		{
+			numCmdPerThread[numCores] = (uint32_t)mNumCmdWrkld / mNumCore;
+		}
+	}
+	else
+	{
+		for (uint8_t numCores = 0; numCores < mNumCore; numCores++)
+		{
+			numCmdPerThread[numCores] = (uint32_t)mNumCmdWrkld;
+		}
+	}
+	residualCmd[0] = (uint32_t)mNumCmdWrkld % mNumCore;
+	for (uint32_t numCores = 1; numCores < (uint32_t)mNumCore; numCores++)
+	{
+		residualCmd[numCores] = 0;
+	}
+	mFirstCmdTime = sc_time_stamp();
+
+	for (uint8_t numCores = 0; numCores < mNumCore; numCores++)
+	{
+		sc_spawn(sc_bind(&TestBenchTop::mcore_threadFromWorkLoad, \
+			this, numCores, numCmdPerThread[numCores], residualCmd[numCores]), sc_gen_unique_name("mcore_threadFromWorkLoad"));
+	}
+
+	while (1)
+	{
+		if (cmdCounter == mNumCmdWrkld)
+		{
+
+			if (mLogIOPS == false)
+			{
+				sc_time lastCmdTime = sc_time_stamp();
+				sc_time delayTime = lastCmdTime - mFirstCmdTime;
+				mIOPSReport->writeFile(delayTime.to_double(), (double)(mNumCmdWrkld * 1000 / delayTime.to_double()), " ");
+				mLogIOPS = true;
+			}
+			wait(mPollWaitTime, SC_NS);
+			break;
+		}
+		else
+		{
+			wait(mPollWaitTime, SC_NS);
+		}
+	}
+	sc_stop();
+}
+
+#pragma endregion
+
+#pragma region MULTI_CORE_TEST_CASES
+void TestBenchTop::mcore_thread(int cpuNum, int numCmdPerThread, uint32_t residualCmd)
+{
+	uint64_t lba = 0;
+	testCmdType cmd;
+	uint16_t numSlot = (uint16_t)cpuNum;
+	uint64_t effectiveLba = 0;
+	uint64_t cmdPayload = 0;
+	//uint32_t numCmdPerThread = 0;
+	uint8_t lbaSkipGap = (uint8_t)(mBlockSize / mCwSize);
+	sc_time waitTime = sc_time(0, SC_NS);
+	bool cmdStatus = false;
+	bool firstSlotIndexed = false;
+	cmdField payload;
+	uint8_t remSlot;
+	numCmdPerThread += residualCmd;
+		
+	mTrafficGen.openReadModeFile();
+	
+	uint64_t cmdCount = 0;
+	/*if (mCmdType == 0){
+	cmd = WRITE;
+	}
+	else if (mCmdType == 1){
+	cmd = READ;
+	}*/
+
+	for (uint32_t cmdIndex = 0; cmdIndex < (uint32_t)numCmdPerThread; cmdIndex++)
+	{
+		mTrafficGen.readCommand(payload);
+		uint8_t numSlotReq = mSlotManagerObj.getNumSlotRequired(mBlockSize, mIoSize, mCwSize, remSlot);
+		if (mIoSize >= mBlockSize)
+		{
+			lbaSkipGap = mBlockSize / mCwSize;
+		}
+		else
+		{
+			lbaSkipGap = mIoSize / mCwSize;
+		}
+
+
+		uint16_t tags;
+		int16_t slotReqIndex = 0;
+		while (slotReqIndex < (int16_t)numSlotReq)
+		{
+			if (!firstSlotIndexed)
+			{
+				mSlotManagerObj.getFreeTags(tags);
+				firstSlotIndexed = true;
+				mSlotManagerObj.addFirstSlotNum(tags, numSlot);
+				mLatency.at(tags).startDelay = sc_time_stamp().to_double();
+			}
+			mSlotManagerObj.addSlotToList(tags, numSlot);
+			uint64_t tempLba = payload.lba;
+			mLBAReport->writeFile("LBA", sc_time_stamp().to_double(), tempLba, " ");
+
+			mLogFileHandler << "TestCase: "
+				<< " @Time= " << dec << sc_time_stamp().to_double() << " ns"
+				<< " Slot Number= " << dec << (uint32_t)numSlot
+				<< " CPU Number" << dec << cpuNum
+				<< endl;
+			if (payload.d == ioDir::read)
+			{
+				cmd = READ_CMD;
+			}
+			else
+			{
+				cmd = WRITE_CMD;
+			}
+			if (cmd == WRITE_CMD)
+			{
+				bus_arbiter.lock();
+				sendWrite(effectiveLba, cmdPayload, numSlot, tempLba);
+				slotReqIndex++;
+				bus_arbiter.unlock();
+				waitTime = sc_time(mPollWaitTime, SC_NS);
+			}
+
+			if (cmd == READ_CMD)
+			{
+				bus_arbiter.lock();
+				sendRead(effectiveLba, cmdPayload, numSlot, tempLba);
+				slotReqIndex++;
+				bus_arbiter.unlock();
+				waitTime = sc_time(mPollWaitTime, SC_NS);
+			}
+			
+			bool pollFlag = true;
+			while (1)
+			{
+				if (pollFlag)
+				{
+					wait(mPollWaitTime, SC_NS);
+					pollFlag = false;
+				}
+				readCompletionQueue(numSlot, cmdStatus, waitTime);
+
+				waitTime = sc_time(mPollWaitTime, SC_NS);
+				if (cmdStatus)
+				{
+					
+					if (cmd == READ_CMD)
+					{
+						int cwCnt = (mBlockSize / mCwSize);
+						bus_arbiter.lock();
+						checkData(numSlot, cwCnt, payload.lba);
+						bus_arbiter.unlock();
+					}
+					uint16_t tags;
+					if (mSlotManagerObj.removeSlotFromList(tags, numSlot))
+					{
+						if (mSlotQueue.size() != 0)
+							mSlotQueue.pop();
+						if (mSlotManagerObj.getListSize(tags) == 0)
+						{
+							mLatency.at(tags).endDelay = sc_time_stamp().to_double();
+							mLatency.at(tags).latency = mLatency.at(tags).endDelay - mLatency.at(tags).startDelay;
+							mSlotManagerObj.resetTags(tags);
+							uint16_t slotNum = mSlotManagerObj.getFirstSlotNum(tags);
+							mLatencyRep->writeFile(numSlot, mLatency.at(tags).latency / 1000, " ");
+							mLatencyRepCsv->writeFile(numSlot, mLatency.at(tags).latency / 1000, ",");
+						}
+						mSlotManagerObj.freeSlot(numSlot);
+					}
+					break;
+				}
+			}//while(1)
+		}//while(slotReqIndex < (int16_t)numSlotReq)
+		firstSlotIndexed = false;
+		cmdCounter++;
+		lba = 0;
+	}//for (uint32_t cmdIndex = 0;
+
+	/*if (cmdCounter == mNumCmd)
+	{
+	sc_stop();
+	}*/
+	if (cmdCounter == mNumCmd)
+	{
+		if (mLogIOPS == false)
+		{
+			sc_time lastCmdTime = sc_time_stamp();
+			sc_time delayTime = lastCmdTime - mFirstCmdTime;
+			mIOPSReport->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), " ");
+			mIOPSReportCsv->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), ",");
+			mLogIOPS = true;
+		}
+		//wait(500, SC_NS);
+		sc_stop();
+
+	}
+}
+
+void TestBenchTop::multiThread()
+{
+	sc_time firstCmdTime = sc_time_stamp();
+	mTrafficGen.openReadModeFile();
+	for (uint8_t numCores = 0; numCores < mNumCore; numCores++)
+	{
+		sc_spawn(sc_bind(&TestBenchTop::mcore_thread, \
+			this, numCores, numCmdPerThread[numCores], residualCmd[numCores]), sc_gen_unique_name("mcore_thread"));
+	}
+	mTrafficGen.closeReadModeFile();
+	/*while (1)
+	{
+	if (cmdCounter == mNumCmd)
+	{
+
+	if (mLogIOPS == false)
+	{
+	sc_time lastCmdTime = sc_time_stamp();
+	sc_time delayTime = lastCmdTime - firstCmdTime;
+	mIOPSReport->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), " ");
+	mIOPSReportCsv->writeFile(delayTime.to_double(), (double)(mNumCmd * 1000 / delayTime.to_double()), ",");
+	mLogIOPS = true;
+	}
+	wait(500, SC_NS);
+	break;
+	}
+	else
+	{
+	wait(500, SC_NS);
+	}
+	}
+	sc_stop();*/
+}
+
+#pragma endregion
+
 void TestBenchTop::freeSlot(uint16_t& slotIndex, uint8_t slotCount)
 {
 	uint16_t tags = mSlotManagerObj.getTag(slotIndex);
@@ -2328,150 +2757,7 @@ void TestBenchTop::freeSlot(uint16_t& slotIndex, uint8_t slotCount)
 	}//if
 }
 
-void TestBenchTop::freeSlot(uint16_t& slotIndex)
-{
-	uint16_t tags;
-	//uint8_t numSlot = mSlotManagerObj.getListSize(tags);
 
-	if (mSlotManagerObj.removeSlotFromList(tags, slotIndex))
-	{
-		if (mSlotManagerObj.getListSize(tags) == 0)
-		{
-			uint32_t qIndex = 0;
-
-			mSlotManagerObj.resetTags(tags);
-			uint16_t slotNum = mSlotManagerObj.getFirstSlotNum(tags);
-			std::vector<CmdQueueField>::iterator index;
-
-			/*Find the entry in the submission queue corresponding to the command being completed and
-			then set the isCmdDone flag to true to signal that the corresponding entry in the SQ is available to be
-			populated*/
-			if (findQueueEntry(index, slotNum))
-			{
-				CmdQueueField queueEntry = *index;
-				double latency = sc_time_stamp().to_double() - queueEntry.startDelay;
-				mFreeSpace++;
-
-				mLatencyRep->writeFile(slotNum, latency / 1000, " ");
-				mLatencyRepCsv->writeFile(slotNum, latency / 1000, ",");
-
-				mTrigSubCmdEvent.notify(SC_ZERO_TIME);
-				mSlotIndexQueue.push(slotNum);
-
-				//wait(mTrigCmdDispatchEvent);
-				
-				mIsCmdCompleted = true;
-			}
-
-
-		}
-		mSlotManagerObj.freeSlot(slotIndex);
-	}//if
-}
-
-
-void TestBenchTop::freeSlotWithWorkload(uint16_t& slotIndex)
-{
-	uint16_t tags;
-	//uint8_t numSlot = mSlotManagerObj.getListSize(tags);
-
-	if (mSlotManagerObj.removeSlotFromList(tags, slotIndex))
-	{
-		if (mSlotManagerObj.getListSize(tags) == 0)
-		{
-			uint32_t qIndex = 0;
-			
-			mSlotManagerObj.resetTags(tags);
-			uint16_t slotNum = mSlotManagerObj.getFirstSlotNum(tags);
-			std::vector<CmdQueueField>::iterator index;
-
-			/*Find the entry in the submission queue corresponding to the command being completed and 
-			then set the isCmdDone flag to true to signal that the corresponding entry in the SQ is available to be
-			populated*/
-			if (findQueueEntry(index, slotNum))
-			{
-				CmdQueueField queueEntry = *index;
-				double latency = sc_time_stamp().to_double() - queueEntry.startDelay;
-				mFreeSpace++;
-
-				mLatencyRep->writeFile(slotNum, latency / 1000, " ");
-				mLatencyRepCsv->writeFile(slotNum, latency / 1000, ",");
-				
-				mTrigSubCmdEvent.notify(SC_ZERO_TIME);
-				mSlotIndexQueue.push(slotNum);
-
-				if (!mWrkLoad.isEOF())
-				{
-					wait(mTrigCmdDispatchEvent);
-				}
-				mIsCmdCompleted = true;
-			}
-			
-		
-		}
-		mSlotManagerObj.freeSlot(slotIndex);
-	}//if
-}
-
-/*Empty Slot when run out of slots during dispatching ofcommands
- from the SQ*/
-void TestBenchTop::emptySlot(uint16_t& slotIndex)
-{
-	uint16_t tags;
-	//uint8_t numSlot = mSlotManagerObj.getListSize(tags);
-
-	if (mSlotManagerObj.removeSlotFromList(tags, slotIndex))
-	{
-		if (mSlotManagerObj.getListSize(tags) == 0)
-		{
-			uint32_t qIndex = 0;
-
-			/*mLatency.at(tags).endDelay = sc_time_stamp().to_double();
-			mLatency.at(tags).latency = mLatency.at(tags).endDelay - mLatency.at(tags).startDelay;*/
-			mSlotManagerObj.resetTags(tags);
-			uint16_t slotNum = mSlotManagerObj.getFirstSlotNum(tags);
-			std::vector<CmdQueueField>::iterator index;
-			findQueueEntry(index, slotNum);
-			CmdQueueField queueEntry;
-			queueEntry = *index;// mSubQueue.front();
-			
-			//CmdQueueField queueEntry = *index;
-			//double startDelay;
-			//findStartLatency(startDelay, slotNum);
-			double latency = sc_time_stamp().to_double() - queueEntry.startDelay;
-			//mSubQueue.pop();
-
-			mFreeSpace++;
-			//free Submission queue
-			//mSubQueue.erase(index);
-			mLatencyRep->writeFile(slotNum, latency / 1000, " ");
-			mLatencyRepCsv->writeFile(slotNum, latency / 1000, ",");
-			
-			mSlotIndexQueue.push(slotNum);
-		
-			mTrigSubCmdEvent.notify(SC_ZERO_TIME);
-			//cmdCompleteCount++;
-			mIsCmdCompleted = true;
-
-
-		}
-		mSlotManagerObj.freeSlot(slotIndex);
-	}
-}
-
-void TestBenchTop::findStartLatency(double& startLatency, uint16_t slotNum)
-{
-
-	for (std::vector<testCmdLatencyData>::iterator it = mQueueLatency.begin(); it != mQueueLatency.end(); it++)
-	{
-		if((it->slotNum == slotNum) && (it->isDone == true))
-		{
-			startLatency = it->startDelay;
-			//mQueueLatency.erase(it);
-			break;
-		}
-	}
-}
 
 #if 0
 void TestBenchTop::submissionQueueThread()
@@ -2512,189 +2798,6 @@ void TestBenchTop::submissionQueueThread()
 	}
 }
 #endif
-
-void TestBenchTop::processCompletionQueue(bool& isSlotBusy)
-{
-	bool pollFlag1 = true;
-	uint8_t queueCount = 0;
-	uint8_t validCount = 0;
-	//If slots are not available then poll
-	while (1)
-	{
-		/*if (pollFlag1)
-		{
-		wait(mPollWaitTime, SC_NS);
-		pollFlag1 = false;
-		}*/
-		if (!isSlotBusy)
-		{
-			getCompletionQueue(queueCount, validCount);
-			mQueueCount = queueCount;
-			mValidCount = validCount;
-			mByteIndex = 0;
-		}
-		uint16_t slotIndex;
-		if (mQueueCount)
-		{
-			
-			while(mByteIndex < mValidCount)
-			{
-				
-				/*Read Completion queue and extract slot number from the
-				payload*/
-				readCompletionQueueData(mByteIndex, slotIndex);
-				isSlotBusy = true;
-				/*Free Slot so that it can be re-used*/
-				//freeSlot(slotIndex);
-				emptySlot(slotIndex);
-
-				/*Erase a specific slot from the slot queue
-				*/
-				popSlotFromQueue(slotIndex);
-				mByteIndex++;
-				if (mIsCmdCompleted)
-				{
-					mIsCmdCompleted = false;
-					break;
-				}
-
-			}
-			if (mByteIndex == mValidCount)
-			{
-               isSlotBusy = false;
-			}
-			break;
-			/*if all the sub-commands of a particular ioSize is done
-			then resume slot processing*/
-			//if (mIsCmdCompleted)
-			//{
-			//	
-			//	//if even a single command is complete
-			//	//exit the while loop and send more cmds.
-			//	mIsCmdCompleted = false;
-			//	break;
-			//}
-
-		}
-		else
-		{
-			wait(mPollWaitTime, SC_NS);
-		}
-	}//while (1)
-}
-
-void TestBenchTop::submissionQueueThread()
-{
-	if (mNumCmd < mQueueDepth)
-	{
-		mQueueDepth = mNumCmd;
-	}
-	cmdField payload;
-	uint32_t cmdIndex = 0;
-	mTrafficGen.openReadModeFile();
-    mFreeSpace = mQueueDepth;
-	mFirstCmdTime = sc_time_stamp();
-	
-		mTrafficGen.openWriteModeFile();
-		if (mEnableSameBankTest)
-		{
-			/*This method generates successive commands with LBA to
-			pointing to the same bank albeit different page*/
-			mTrafficGen.writeCommandsToSameBanks(mNumCmd);
-		}
-		else
-		{
-			mTrafficGen.writeCommands(mNumCmd);
-		}
-		mTrafficGen.closeWriteModeFile();
-	
-	for (uint32_t queueIndex = 0; queueIndex < mQueueDepth; queueIndex++)
-	{
-		if (cmdIndex < mNumCmd)
-		{
-			mTrafficGen.getCommands(payload);
-			CmdQueueField queueEntry;
-
-			queueEntry.startDelay = sc_time_stamp().to_double();
-		
-			queueEntry.payload = payload;
-			queueEntry.isDispatched = false;
-			queueEntry.isCmdDone = false;
-			mSubQueue.push_back(queueEntry);
-			mCmdCount++;
-			cmdIndex++;
-			
-		}
-	}
-	mTrigCmdDispatchEvent.notify(SC_ZERO_TIME);
-	wait(mTrigSubCmdEvent);
-	while (1)
-	{
-
-		while (!mSlotIndexQueue.empty())
-		{
-
-			uint16_t slotNum = mSlotIndexQueue.front();
-			mSlotIndexQueue.pop();
-
-			mTrafficGen.getCommands(payload);
-			
-			for (std::vector<CmdQueueField>::iterator it = mSubQueue.begin(); it != mSubQueue.end(); it++)
-			{
-				if ((it->slotNum == slotNum) && (it->isDispatched == true) && (it->isCmdDone == true))
-				{
-					it->payload = payload;
-					it->startDelay = sc_time_stamp().to_double();
-					it->isDispatched = false;
-					it->isCmdDone = false;
-					/*testCmdLatencyData latencyData;
-					latencyData.startDelay = sc_time_stamp().to_double();
-					latencyData.endDelay = 0;
-					latencyData.slotNum = 0;
-					latencyData.isDone = false;
-					mQueueLatency.push_back(latencyData);*/
-					break;
-				}
-
-			}
-			cmdIndex++;
-			mCmdCount++;
-		}
-		mFreeSpace = 0;
-		mTrigCmdDispatchEvent.notify(SC_ZERO_TIME);
-		wait(mTrigSubCmdEvent);
-
-		if (cmdIndex == mNumCmd)
-		{
-			wait();
-		}
-
-	}
-}
-
-bool TestBenchTop::findQueueEntry(std::vector<CmdQueueField>::iterator& index, const uint16_t slotNum)
-{
-	std::ostringstream msg;
-	std::vector<CmdQueueField>::iterator it;
-
-	for (it = mSubQueue.begin(); it != mSubQueue.end(); it++)
-	{
-
-		if ((it->slotNum == slotNum) && (it->isCmdDone == false) && (it->isDispatched==true))
-		{
-			it->isCmdDone = true;
-			//it->isDispatched = false;
-			index = it;
-			
-			return true;
-			
-		}
-	
-	}
-	return false;
-	
-}
-
 
 void TestBenchTop::testCacheModelThread()
 {

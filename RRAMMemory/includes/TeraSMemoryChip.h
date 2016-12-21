@@ -238,13 +238,16 @@ namespace CrossbarTeraSLib {
 		//std::vector<sc_event* > mPhyDL1WriteEvent;
 		std::vector<sc_event* > mPhyDL1FreeEvent;
 		std::vector<sc_event* > mPhyDL2FreeEvent;
-		std::vector<sc_event* > mTrigDL1FreeStatusMethodEvent;
+		//std::vector<sc_event* > mTrigDL1FreeStatusMethodEvent;
 		/*Queue to push bankIndex value by SendWriteAccessAckMethod and pop by 
 		  memAccessWriteMethod*/
-		std::queue<uint8_t> mBankIndexQueue;
-		std::queue<uint8_t> mPageIndexQueue;
-		std::queue<uint8_t> mNumDieQueue;
+		std::queue<uint8_t> mWriteBankIndexQueue;
+		std::queue<uint8_t> mWritePageIndexQueue;
+		std::queue<uint8_t> mWriteNumDieQueue;
 
+		std::queue<uint8_t> mReadBankIndexQueue;
+		std::queue<uint8_t> mReadPageIndexQueue;
+		std::queue<uint8_t> mReadNumDieQueue;
 		double mWriteCmdTransSpeed;
 		double mReadCmdTransSpeed;
 		double mReadDataTransSpeed;
