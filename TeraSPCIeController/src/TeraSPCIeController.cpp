@@ -784,11 +784,7 @@ namespace  CrossbarTeraSLib {
 
 		sc_core::sc_time delay = queueData.time;
 
-		/*Short Queue utilization log*/
-		/*  mShortQueueSize.at(chanNum) = (uint16_t)mAscq.at(chanNum).getSize();
-		mShortQueueReport->writeFile("SHORT", sc_time_stamp().to_double() + delay.to_double(), chanNum, mShortQueueSize.at(chanNum), " ");
-		mShortQueueReportCsv->writeFile("SHORT", sc_time_stamp().to_double() + delay.to_double(), chanNum, mShortQueueSize.at(chanNum), ",");*/
-
+		
 		msg.str("");
 		msg << "SHORT COMMAND: "
 			<< " @Time " << dec << (sc_time_stamp().to_double() + delay.to_double())
@@ -807,9 +803,9 @@ namespace  CrossbarTeraSLib {
 			<< " Queue Number= " << dec << (uint32_t)queueData.queueNum
 			<< endl;
 
-		// mOnfiCode.at(chanNum) = ONFI_READ_COMMAND;
+		
 		sc_time currTime = sc_time_stamp();
-		//delay = SC_ZERO_TIME;
+		
 		/*Send READ command to the ONFI channel*/
 		mOnfiBusMutex.at(chanNum)->lock();
 		RRAMInterfaceMethod(queueData, chanNum, mReadData.at(chanNum), delay, ONFI_READ_COMMAND);
@@ -818,7 +814,7 @@ namespace  CrossbarTeraSLib {
 		currTime = sc_time_stamp();
 		/*Push the cmd data into the pending queue*/
 		mPendingReadCmdQueue.at(chanNum)->notify(queueData, mReadTime);
-		//wait(SC_ZERO_TIME);
+		
 	}
 
 	void TeraSPCIeController::dispatchWriteCmd(uint8_t chanNum, ActiveDMACmdQueueData& queueData)
@@ -836,6 +832,29 @@ namespace  CrossbarTeraSLib {
 		mWriteDataBuff.readData(queueData.buffPtr, mWriteData.at(chanNum));
 		RRAMInterfaceMethod(queueData, chanNum, mWriteData.at(chanNum), queueData.time, ONFI_WRITE_COMMAND);
 		
+		uint16_t cwBankIndex = getActiveCwBankIndex(queueData.plba);
+		bool chipSelect = getActiveChipSelect(queueData.plba);
+
+		/*In case 2nd die is selected then cwBankIndex corresponds to the
+		second die. This is used t select appropriate bank to update the
+		status*/
+		if (chipSelect && (mNumDie > 1))
+			cwBankIndex = cwBankIndex + mCodeWordNum / 2;
+
+		while (mPhyDL1Status.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_BUSY)
+		{
+			wait(*mPhyDL1FreeEvent.at(chanNum));
+		}
+		if (mPhyDL1Status.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_FREE)
+		{
+			/*Set Physical Data Latch2 FREE as DL1 is empty */
+			mPhyDL2Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+			mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+			/*Set Physical Data Latch 1 BUSY as data is sent to DL1 from DL2 immediately
+			after that*/
+			mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY;
+			mTrigCmdDispEvent.at(chanNum)->notify(SC_ZERO_TIME);
+		}
 		/*Free up the data buffer after the data has been transferred
 		 across ONFI channel*/
 
@@ -927,6 +946,11 @@ namespace  CrossbarTeraSLib {
 					RRAMInterfaceMethod(cmdData.cmd, cmdData.chanNum, mReadData.at(cmdData.chanNum), delay, ONFI_BANK_SELECT_COMMAND);
 					mOnfiBusMutex.at(chanNum)->unlock();
 
+					uint16_t cwBankIndex = getActiveCwBankIndex(cmdData.cmd.plba);
+					mPhyDL2Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+					mPhyDL2FreeEvent.at(chanNum)->notify(SC_ZERO_TIME);
+
+					/*Notifies Channel Manager thread about DMA transfer completion*/
 					mReadDataRxEvent.at(chanNum)->notify(SC_ZERO_TIME);
 					currTime = sc_time_stamp();
 
@@ -1241,13 +1265,13 @@ namespace  CrossbarTeraSLib {
 
 								cmd.cmd = queueData;
 								cmd.chanNum = chanNum;
-								//mActiveDMACmdQueue.at(chanNum) = cmd;
 								
 								mActiveDMACmdQueue.push_back(cmd);
 								currTime = sc_time_stamp();
 								
+								/*Notifies Dispatch Read Command thread to preform DMA transfer*/
 								mDispatchCmdEvent.at(chanNum)->notify(SC_ZERO_TIME);
-								//wait(*(mEndReadEvent.at(chanNum)));
+								
 								wait(*mReadDataRxEvent.at(chanNum));
 								
 								ActiveDMACmdQueueData cmdData = mDMADoneQueue.at(chanNum).front();
@@ -1307,15 +1331,23 @@ namespace  CrossbarTeraSLib {
 
 						uint16_t cwBankIndex = getCwBankIndex(cmd.plba);
 
-						/*Make DL1 status free again*/
-						mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
-						mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+						if (mPhyDL2Status.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_BUSY)
+						{
+							wait(*mPhyDL2FreeEvent.at(chanNum));
+						}
+						if (mPhyDL2Status.at(chanNum).at(cwBankIndex) == cwBankStatus::BANK_FREE)
+						{
+							/*Make DL1 status free again*/
+							mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+							mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+							mPhyDL2Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_BUSY;
+							mTrigCmdDispEvent.at(chanNum)->notify(SC_ZERO_TIME);
+						}
 						/*Push READ Command into the DMA queue*/
 						mAdcq.at(chanNum).pushQueue(value);
 						/*Notify that there is command in the ADCQ*/
 						mAdcqNotEmptyEvent.at(chanNum)->notify(SC_ZERO_TIME);
-
-						//plba |= ((uint64_t)chanNum & 0x0F);
+												
 						msg.str("");
 						msg << "PENDING QUEUE PUSH:: READ COMMAND: "
 							<< "  @Time: " << dec << sc_time_stamp().to_double()
@@ -1331,8 +1363,6 @@ namespace  CrossbarTeraSLib {
 							<< " Command Type: " << hex << (uint32_t)cmd.cmd
 							<< " Channel Number= " << dec << (uint32_t)chanNum
 							<< endl;
-
-						//wait(SC_ZERO_TIME);
 
 					}//if(READ)
 				}//if (!mAdcq.at(chanNum).isFull())
@@ -1396,9 +1426,10 @@ namespace  CrossbarTeraSLib {
 				sc_time currTime = sc_time_stamp();
 				/* Free the corresponding bank status*/
 				mCwBankStatus.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
-
+				mPhyDL1Status.at(chanNum).at(cwBankIndex) = cwBankStatus::BANK_FREE;
+				mPhyDL1FreeEvent.at(chanNum)->notify(SC_ZERO_TIME);
 				/*Notify Command Dispatcher of the free bank status*/
-				mTrigCmdDispEvent.at(chanNum)->notify(SC_ZERO_TIME);
+				//mTrigCmdDispEvent.at(chanNum)->notify(SC_ZERO_TIME);
 
 				/*Set PCMD Queue status to free*/
 				mCmdQueue.setQueueFree(cmd.queueNum);
@@ -1765,10 +1796,10 @@ namespace  CrossbarTeraSLib {
 				/*Get the address of CQ1 queue entry to write to*/
 				address = mCQ1Queue.getTail();
 				mCQ1Queue.push();
+
 				/*Create Memory Write TLP for Completion Queue*/
 				createMemWriteTLP(address, hostQueueType::COMPLETION, qAddr, data);
-
-				//mArbiterToken.push(2);
+								
 				/*Notify to arbitrate the TLP on the bus*/
 				mArbitrateEvent.notify(SC_ZERO_TIME);
 								
@@ -2794,6 +2825,8 @@ namespace  CrossbarTeraSLib {
 		uint16_t cwBank = (uint16_t)((lba) & getCwBankMask());
 		return cwBank;
 	}
+
+	
 #pragma endregion MEMBER_FUNCTIONS
 
 #pragma region TLP_CREATION_METHODS
@@ -3018,6 +3051,9 @@ void TeraSPCIeController::initChannelSpecificParameters()
 		mReadDataRxEvent.push_back(new sc_event(sc_gen_unique_name("mReadDataRxEvent")));
 		mWriteDataSentEvent.push_back(new sc_event(sc_gen_unique_name("mWriteDataSentEvent")));
 
+		/*Event to notify DL1 and DL2 latches free/busy status*/
+		mPhyDL1FreeEvent.push_back(new sc_event(sc_gen_unique_name("mPhyDL1FreeEvent")));
+		mPhyDL2FreeEvent.push_back(new sc_event(sc_gen_unique_name("mPhyDL2FreeEvent")));
 		mRespQueue.push_back(new tlm_utils::peq_with_get<tlm::tlm_generic_payload>(sc_gen_unique_name("respQueueEvent")));
 
 		pChipSelect.push_back(new sc_core::sc_out<bool>(sc_gen_unique_name("pChipSelect")));

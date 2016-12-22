@@ -22,7 +22,7 @@
 #include <vector>
 #include "WorkLoadManager.h"
 #include "trafficGenerator.h"
-#include "PCIeRegisterCommon.h"
+//#include "PCIeRegisterCommon.h"
 //#include "DataGen.h"
 
 #ifndef _PCI_TESTBENCH_
@@ -72,7 +72,7 @@ namespace CrossbarTeraSLib{
 		bool initController(void);
 		bool executeTest(uint32_t testNo);
 		bool executeTestWriteRead();
-		bool executePCIeRegisterTest();
+		//bool executePCIeRegisterTest();
 		void checkData();
 		void sendPayload(const tlm::tlm_command cmd, const uint64_t &address, const uint32_t &dataLen, uint8_t* data, sc_time& delay);
 #pragma endregion

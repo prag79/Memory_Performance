@@ -26,7 +26,7 @@
 #include "pcie_common.h"
 #include "Config.h"
 #include "NvmeQueue.h"
-#include "pcie_register_model.hpp"
+//#include "pcie_register_model.hpp"
 
 using namespace CrossbarTeraSLib;
 static const char *filePCIeRC = "pcieRC.h";
@@ -146,7 +146,7 @@ private:
 	uint32_t            mTbQueueDepth;
 	bool				wrapFlag;
 
-	pcie_register_model		mPcieRegisterModel;
+	//pcie_register_model		mPcieRegisterModel;
 #pragma endregion
 };
 #endif

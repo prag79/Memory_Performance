@@ -240,4 +240,15 @@ namespace CrossbarTeraSLib {
 		name.append(format);
 		return name;
 	}
+
+	uint16_t TeraSPCIeControllerBase::getActiveCwBankIndex(const uint64_t& lba)
+	{
+		uint16_t cwBank = (uint16_t)((lba)& getCwBankMask());
+		return cwBank;
+	}
+
+	bool TeraSPCIeControllerBase::getActiveChipSelect(const uint64_t& lba)
+	{
+		return (bool)((lba >> (mCwBankMaskBits)& 0x1));
+	}
 }

@@ -537,6 +537,13 @@ namespace  CrossbarTeraSLib {
 		std::vector<sc_event*>  mReadDataRxEvent;
 		std::vector<sc_event*>  mWriteDataSentEvent;
 		std::vector<sc_event* > mDispatchOnBuffFreeEvent;
+
+		/*Event to notify DL1 is free */
+		std::vector<sc_event* > mPhyDL1FreeEvent;
+
+		/*Event to notify DL2 is free*/
+		std::vector<sc_event*> mPhyDL2FreeEvent;
+
 		/*Write Buffer has space event, it is triggered for each 
 		channel*/
 		//std::queue<sc_event* > mWrBuffHasSpaceEvent;

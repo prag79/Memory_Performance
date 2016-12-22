@@ -119,7 +119,8 @@ namespace  CrossbarTeraSLib {
 		uint64_t getActivePageMask();
 		uint64_t getActiveLBAMask();
 		uint64_t getPendingLBAMask();
-
+		uint16_t getActiveCwBankIndex(const uint64_t& lba);
+		bool getActiveChipSelect(const uint64_t& lba);
 		void decodeCommand(const ActiveCmdQueueData cmd, cmdType& ctype, uint8_t& cwBank, bool& chipSelect, uint32_t& page);
 		void decodeCommand(const ActiveDMACmdQueueData queueData, cmdType& ctype, \
 			uint8_t& cwBank, bool& chipSelect, uint32_t& page);
