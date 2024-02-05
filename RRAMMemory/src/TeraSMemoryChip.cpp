@@ -71,7 +71,7 @@ namespace CrossbarTeraSLib {
 								  sc_core::sc_time currTime = sc_time_stamp();
 								
 								  peqDelay = accessDelay;
-								  uint64_t addr = payload.get_address();
+								  auto addr = payload.get_address();
 								  uint8_t code;
 								  uint8_t cwBankNum;
 								  uint32_t pageNum;
@@ -648,7 +648,7 @@ namespace CrossbarTeraSLib {
 	* @param pageNum Page Number in each bank to access
 	* @return void
 	**/
-	void TeraSMemoryDevice::decodeAddress(const sc_dt::uint64 memAddr, \
+	void TeraSMemoryDevice::decodeAddress(auto memAddr, \
 		uint8_t& codeWordBankNum, uint32_t& pageNum, uint8_t& code)
 	{
 		if (mPageSize == 0)
@@ -682,9 +682,9 @@ namespace CrossbarTeraSLib {
 	**/
 	bool TeraSMemoryDevice::checkAddress(tlm::tlm_generic_payload &payload)
 	{
-		uint64_t memAddr = payload.get_address();
+		auto memAddr = payload.get_address();
 		memAddr = memAddr & 0x00ffffffffffffff;
-		uint64_t memSize = mPageNum * mPageSize;
+		auto memSize = mPageNum * mPageSize;
 		memSize *= mBankNum;
 		if (memAddr >= (memSize))
 			return false;

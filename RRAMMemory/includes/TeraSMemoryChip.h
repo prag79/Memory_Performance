@@ -13,6 +13,7 @@
 #ifndef MODELS_TERAS_MEMORY_DEVICE_H_
 #define MODELS_TERAS_MEMORY_DEVICE_H_
 #define SC_INCLUDE_DYNAMIC_PROCESSES
+
 #include "systemc.h"
 #include <cmath>
 #include "tlm.h"
@@ -39,15 +40,15 @@ namespace CrossbarTeraSLib {
 			const sc_time readTime, const sc_time programTime, uint32_t onfiSpeed,
 			uint8_t chanNum, uint32_t blockSize,uint32_t queueDepth, bool enMultiSim, uint32_t ioSize, bool isPCIe)
 			: sc_module(name)
-			, mCodeWordSize(codeWordSize)
-			, mNumDie(numDie)
-			, mBankNum(bankNum)
-			, mPageNum(pageNum)
-			, mPageSize(pageSize)
-			, mReadTime(readTime)
-			, mProgramTime(programTime)
-			, mCodeWordBankNum(codeWordSize / pageSize)
-			, mBankMaskBits((uint32_t)log2(double(bankNum)))
+			, mCodeWordSize(codeWordSize) //codeWordSize is configurable
+			, mNumDie(numDie) //Number of die or rank is configurable
+			, mBankNum(bankNum) //Number of banks is configurable
+			, mPageNum(pageNum) //No. of pages per Bank is configurable
+			, mPageSize(pageSize) // Page size (row size) per bank is configurable
+			, mReadTime(readTime) //Memory Access (read) is configurable
+			, mProgramTime(programTime) // Memory write access is configurable
+			, mCodeWordBankNum(codeWordSize / pageSize) //CodeWordSize should be bigger than page size
+			, mBankMaskBits((uint32_t)log2(double(bankNum))) //Mask bits
 			, mPageMaskBits((uint32_t)log2(double(pageSize)))
 			, mTransactionCount(0)
 			, mLocalTime(sc_time(0, SC_US))
@@ -57,12 +58,12 @@ namespace CrossbarTeraSLib {
 			, mLastSimTime(SC_ZERO_TIME)
 			, mCurrentSimTime(SC_ZERO_TIME)
 			, mNumBytes(0)
-			, mOnfiSpeed(onfiSpeed)
+			, mOnfiSpeed(onfiSpeed)//Onfi speed is configurable
 			, mChanNum(chanNum)
 			, mCodeWordBank((uint32_t) (bankNum * numDie) /mCodeWordBankNum)
-			, mEnMultiSim(enMultiSim)
-			, mBlockSize(blockSize)
-			, mQueueDepth(queueDepth)
+			, mEnMultiSim(enMultiSim) //simulator configuration to run sim sweep
+			, mBlockSize(blockSize) //Block Size 
+			, mQueueDepth(queueDepth) // Queuedepth
 			, mIOSize(ioSize)
 			, mIsPCIe(isPCIe)
 		{
@@ -239,6 +240,7 @@ namespace CrossbarTeraSLib {
 		std::vector<sc_event* > mPhyDL1FreeEvent;
 		std::vector<sc_event* > mPhyDL2FreeEvent;
 		//std::vector<sc_event* > mTrigDL1FreeStatusMethodEvent;
+		//
 		/*Queue to push bankIndex value by SendWriteAccessAckMethod and pop by 
 		  memAccessWriteMethod*/
 		std::queue<uint8_t> mWriteBankIndexQueue;
@@ -248,6 +250,7 @@ namespace CrossbarTeraSLib {
 		std::queue<uint8_t> mReadBankIndexQueue;
 		std::queue<uint8_t> mReadPageIndexQueue;
 		std::queue<uint8_t> mReadNumDieQueue;
+
 		double mWriteCmdTransSpeed;
 		double mReadCmdTransSpeed;
 		double mReadDataTransSpeed;
